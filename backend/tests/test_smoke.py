@@ -8,4 +8,5 @@ def test_smoke():
 def test_django_imports():
     """Sanity check: Django settings load correctly."""
     from django.conf import settings
+
     assert settings.DEBUG is True or settings.DEBUG is False

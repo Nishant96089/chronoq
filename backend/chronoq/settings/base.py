@@ -1,7 +1,9 @@
 """
 Base settings shared across all environments.
 """
+
 from pathlib import Path
+
 import environ
 
 # BASE_DIR is /app inside the container, i.e. backend/ locally.
