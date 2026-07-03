@@ -92,3 +92,30 @@ they change file source but keep image environment. Whenever a bind-mounted
 file behaves differently in dev vs prod, look here first.
 
 ---
+
+## 2026-07-03 — Scheduler design: on_commit, drift-free advancement, tick lookahead
+
+**Choice:** Three design details worth writing down before I forget why.
+
+**a) `transaction.on_commit(lambda: task.delay(...))`**
+Dispatch Celery tasks AFTER the DB transaction commits, not inside it.
+Otherwise a worker in another process could pick up the task ID before
+the row is visible. Without this, tests pass locally but production
+gets sporadic "DoesNotExist" errors under load.
+
+**b) `next_fire_at = compute_next_fire_at(cron, after=scheduled_for)`**
+Not `after=now`. Advance from the fire time we just consumed, not
+wall-clock now. This prevents cron drift when the tick runs late.
+A 6:00 AM job stays 6:00 AM, not 6:00:03 AM after the first fire.
+
+**c) `TICK_LOOKAHEAD_SECONDS = 45`**
+Wider than the 30s beat interval. Absorbs clock skew and tick jitter
+so no fires slip through. Downside: a job's execution might start
+up to 15s early. Acceptable tradeoff — being late is worse than
+being slightly early in a scheduler.
+
+**Learning:** Small design choices compound. Any one of these missing
+would create bugs I'd chase for hours. Writing them down means I can
+defend them in a senior interview when someone asks "why did you..."
+
+---
