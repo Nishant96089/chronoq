@@ -80,6 +80,32 @@ class Job(models.Model):
     def __str__(self) -> str:
         return f"{self.name} ({self.public_id})"
 
+    def save(self, *args, **kwargs):
+        # Auto-compute next_fire_at whenever the cron changes or on first save.
+        # We import here to avoid a circular import at module load time.
+        from .services import compute_next_fire_at
+
+        # Recompute only if:
+        # - Brand new job (no pk yet), OR
+        # - Cron changed since last DB read.
+        needs_recompute = self.pk is None
+        if not needs_recompute:
+            # Fetch the old cron from DB to compare.
+            old_cron = (
+                Job.objects.filter(pk=self.pk).values_list("schedule_cron", flat=True).first()
+            )
+            needs_recompute = old_cron != self.schedule_cron
+
+        if needs_recompute and self.schedule_cron:
+            try:
+                self.next_fire_at = compute_next_fire_at(self.schedule_cron)
+            except ValueError:
+                # Invalid cron — let the DB save proceed with next_fire_at unchanged.
+                # Model validation via forms/serializers should catch this earlier.
+                pass
+
+        super().save(*args, **kwargs)
+
 
 class JobExecution(models.Model):
     """
