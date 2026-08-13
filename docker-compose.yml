@@ -64,7 +64,7 @@ services:
 
   celery-beat:
     <<: *django-common
-    command: celery -A chronoq beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    command: celery -A chronoq beat -l info
     depends_on:
       postgres:
         condition: service_healthy

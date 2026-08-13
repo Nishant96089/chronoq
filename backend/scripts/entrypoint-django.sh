@@ -1,8 +1,8 @@
 #!/bin/sh
 set -e
 
-# Skip the postgres-wait + migrate dance for one-off commands.
-# Only run it when we're actually starting the server or a long-lived process.
+# Skip the postgres-wait + migrate dance for one-off commands
+# (ruff, black, pytest). Only run it when starting the actual server.
 case "$1" in
     python|gunicorn|celery)
         echo "Waiting for postgres..."
@@ -11,11 +11,13 @@ case "$1" in
         done
         echo "postgres:$POSTGRES_PORT - accepting connections"
 
-        # Migrations should only run once — only if we're starting the Django server.
-        # Not for celery workers/beat, they'd race with each other.
+        # Migrations + superuser only when starting the Django server.
         if [ "$1" = "python" ] && [ "$2" = "manage.py" ] && [ "$3" = "runserver" ]; then
             echo "Running migrations..."
             python manage.py migrate --noinput
+
+            echo "Ensuring dev superuser exists..."
+            python manage.py ensure_superuser
         fi
         ;;
 esac

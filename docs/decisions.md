@@ -119,3 +119,26 @@ would create bugs I'd chase for hours. Writing them down means I can
 defend them in a senior interview when someone asks "why did you..."
 
 ---
+## 2026-08-13 — Move beat schedule from DB to code (drop DatabaseScheduler)
+
+**Problem:** Two failures compounding:
+1. `docker compose down -v` wiped the django_celery_beat periodic task,
+   so beat had nothing to dispatch.
+2. celery-beat with DatabaseScheduler crashed on boot with
+   "column ...clocked_id does not exist" — a race where beat queried
+   the periodic-task table before migrations finished applying.
+
+**Choice:** Define the beat schedule in code via app.conf.beat_schedule
+and use Celery's default PersistentScheduler (dropped
+--scheduler django_celery_beat.schedulers:DatabaseScheduler).
+
+**Reasoning:**
+- Our beat schedule is a single fixed entry (tick every 30s). We never
+  need to add/edit schedules at runtime via the admin.
+- Individual JOB schedules live in our own Job model + tick logic, not
+  in django_celery_beat. DatabaseScheduler was always overkill.
+- Code-based schedule survives DB wipes and has no migration-order race.
+
+**Trade-off:** Lose runtime schedule editing via Django admin. Acceptable —
+we don't use it. django_celery_beat stays in INSTALLED_APPS for now
+(harmless); can remove in a later cleanup pass.
