@@ -27,6 +27,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     # Third-party
     "rest_framework",
+    "rest_framework.authtoken",
     "django_filters",
     "django_celery_beat",
     "django_celery_results",
@@ -107,8 +108,7 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 # ===== Django REST Framework =====
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        # Session auth = uses Django's admin login. Convenient for MVP.
-        # Phase 2 will add token/JWT auth for programmatic access.
+        "rest_framework.authentication.TokenAuthentication",
         "rest_framework.authentication.SessionAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
@@ -122,7 +122,6 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_RENDERER_CLASSES": [
         "rest_framework.renderers.JSONRenderer",
-        # Browsable API — DRF's dev-only UI. Great for exploring endpoints.
         "rest_framework.renderers.BrowsableAPIRenderer",
     ],
 }
