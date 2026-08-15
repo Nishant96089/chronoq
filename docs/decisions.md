@@ -142,3 +142,33 @@ and use Celery's default PersistentScheduler (dropped
 **Trade-off:** Lose runtime schedule editing via Django admin. Acceptable —
 we don't use it. django_celery_beat stays in INSTALLED_APPS for now
 (harmless); can remove in a later cleanup pass.
+
+## 2026-08-13 — Frontend architecture (Phase 1 Step 4)
+
+**Stack:** React 19 + Vite, Tailwind CSS v4 (via @tailwindcss/vite plugin),
+React Query (TanStack) for data fetching, React Router v7, axios.
+
+**Auth: token-based, not session/cookies.**
+- POST /api/auth/token/ returns a DRF token; stored in localStorage.
+- axios request interceptor attaches `Authorization: Token <t>` to every call.
+- Response interceptor clears token + redirects to /login on 401.
+- Chose token over session cookies to avoid the CORS+CSRF cookie dance and
+  match how production SPAs work. SessionAuth kept server-side only for the
+  browsable API.
+
+**Data layer: React Query, all API calls centralized.**
+- api/{client,auth,jobs}.js own HTTP; hooks/useJobs.js owns query/mutation
+  logic + cache invalidation. Components never call axios directly.
+- Query keys centralized (jobKeys) so invalidation is predictable.
+
+**Live execution updates: 5s polling via refetchInterval — for now.**
+- Deliberately NOT WebSockets in Phase 1. Polling is simple and adequate
+  for a single-user dashboard. Real-time via Django Channels is planned for
+  Phase 3, where the same WS infrastructure also serves the distributed
+  layer. Avoided adding ASGI/Channels/channel-layer complexity to a phase
+  meant to stay single-node-simple.
+
+**Custom modals over browser-native dialogs.**
+- window.confirm replaced with a styled ConfirmDialog (Modal + backdrop +
+  Escape/backdrop-close). Kept HTML native `required` validation — it's
+  accessible and expected, not an intrusive popup.
