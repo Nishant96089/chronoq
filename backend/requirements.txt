@@ -11,3 +11,4 @@ croniter==3.0.4
 structlog==24.4.0
 requests==2.32.3
 django-filter==24.3
+django-cors-headers==4.6.0
