@@ -172,3 +172,13 @@ React Query (TanStack) for data fetching, React Router v7, axios.
 - window.confirm replaced with a styled ConfirmDialog (Modal + backdrop +
   Escape/backdrop-close). Kept HTML native `required` validation — it's
   accessible and expected, not an intrusive popup.
+
+## 2026-08-15 — Testing: on_commit + save() recompute gotchas
+
+Two test-only subtleties (production code is correct, tests must adapt):
+- tick() dispatches via transaction.on_commit, which never fires under
+  pytest-django's rolled-back transactions. Use the
+  django_capture_on_commit_callbacks fixture to let tick() complete.
+- Job.save() recomputes next_fire_at from cron, overriding any value
+  passed to the factory. Tests that need a specific next_fire_at set it
+  via Job.objects.filter().update() to bypass save().
