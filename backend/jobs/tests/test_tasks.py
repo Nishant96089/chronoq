@@ -3,13 +3,13 @@ Tests for the scheduler tick and executor tasks.
 
 HTTP calls are mocked with `responses` so tests are fast and deterministic.
 
-Note on transactions: tick() uses transaction.on_commit to dispatch the
-executor. pytest-django wraps tests in a rolled-back transaction, so
-on_commit never fires by default. We use the django_capture_on_commit_callbacks
-fixture where we need those callbacks to run.
+Note on transactions: tick() and _maybe_retry() dispatch via
+transaction.on_commit, which never fires under pytest-django's rolled-back
+transactions. We use django_capture_on_commit_callbacks where needed.
 """
 
 import pytest
+import requests
 import responses
 from django.utils import timezone
 
@@ -21,11 +21,7 @@ pytestmark = pytest.mark.django_db
 
 
 def _set_next_fire_at(job, when):
-    """
-    Set next_fire_at directly in the DB, bypassing Job.save() (which would
-    recompute it from the cron). This lets tests control exactly when a job
-    is 'due'.
-    """
+    """Set next_fire_at directly, bypassing Job.save()'s recompute."""
     Job.objects.filter(pk=job.pk).update(next_fire_at=when)
     job.refresh_from_db()
 
@@ -57,7 +53,6 @@ class TestTick:
 
     def test_tick_advances_next_fire_at(self):
         job = JobFactory(schedule_cron="*/5 * * * *", is_active=True)
-        # Pin next_fire_at to a known past-ish value so advancement is unambiguous.
         pinned = timezone.now().replace(second=0, microsecond=0)
         _set_next_fire_at(job, pinned)
 
@@ -96,7 +91,6 @@ class TestExecuteJobExecution:
     @responses.activate
     def test_connection_error_marks_failed(self):
         job = JobFactory(target_url="https://example.com/hook", http_method="POST")
-        # No responses.add → unregistered URL raises ConnectionError.
         ex = JobExecutionFactory(job=job)
 
         execute_job_execution(ex.id)
@@ -124,7 +118,6 @@ class TestRetryLogic:
         with django_capture_on_commit_callbacks(execute=False):
             execute_job_execution(root.id)
 
-        # A retry (attempt 2) should have been created, pointing at the root.
         retries = JobExecution.objects.filter(parent_execution=root)
         assert retries.count() == 1
         retry = retries.first()
@@ -146,7 +139,6 @@ class TestRetryLogic:
             execute_job_execution(root.id)
 
         retry = JobExecution.objects.get(parent_execution=root)
-        # First retry (attempt 2): delay = 60 * 2^0 = 60s from root.scheduled_for.
         expected = root_time + timezone.timedelta(seconds=60)
         assert retry.scheduled_for == expected
 
@@ -160,13 +152,12 @@ class TestRetryLogic:
         responses.add(responses.POST, "https://example.com/hook", status=500)
         root = JobExecutionFactory(job=job, attempt_number=1, parent_execution=None)
 
-        # Simulate attempt 2 failing → should schedule attempt 3, still pointing at root.
         attempt2 = JobExecutionFactory(job=job, attempt_number=2, parent_execution=root)
         with django_capture_on_commit_callbacks(execute=False):
             execute_job_execution(attempt2.id)
 
         attempt3 = JobExecution.objects.get(attempt_number=3)
-        assert attempt3.parent_execution_id == root.id  # star, not chain
+        assert attempt3.parent_execution_id == root.id
 
     @responses.activate
     def test_retries_exhausted_no_more_retries(self, django_capture_on_commit_callbacks):
@@ -177,13 +168,11 @@ class TestRetryLogic:
         )
         responses.add(responses.POST, "https://example.com/hook", status=500)
         root = JobExecutionFactory(job=job, attempt_number=1, parent_execution=None)
-        # attempt_number 4 > max_retries 3 → should NOT schedule another.
         final = JobExecutionFactory(job=job, attempt_number=4, parent_execution=root)
 
         with django_capture_on_commit_callbacks(execute=False):
             execute_job_execution(final.id)
 
-        # No attempt 5 created.
         assert not JobExecution.objects.filter(attempt_number=5).exists()
 
     @responses.activate
@@ -195,5 +184,47 @@ class TestRetryLogic:
         with django_capture_on_commit_callbacks(execute=False):
             execute_job_execution(root.id)
 
-        # Success → no retry.
         assert JobExecution.objects.filter(parent_execution=root).count() == 0
+
+
+class TestTimeoutHandling:
+    @responses.activate
+    def test_timeout_marks_status_timeout(self, django_capture_on_commit_callbacks):
+        job = JobFactory(
+            target_url="https://example.com/slow",
+            http_method="POST",
+            timeout_seconds=5,
+            max_retries=3,
+        )
+        responses.add(
+            responses.POST,
+            "https://example.com/slow",
+            body=requests.exceptions.Timeout("timed out"),
+        )
+        root = JobExecutionFactory(job=job, attempt_number=1, parent_execution=None)
+
+        with django_capture_on_commit_callbacks(execute=False):
+            result = execute_job_execution(root.id)
+
+        root.refresh_from_db()
+        assert root.status == JobExecution.Status.TIMEOUT
+        assert result["status"] == "timeout"
+
+    @responses.activate
+    def test_timeout_schedules_retry(self, django_capture_on_commit_callbacks):
+        job = JobFactory(
+            target_url="https://example.com/slow",
+            timeout_seconds=5,
+            max_retries=3,
+        )
+        responses.add(
+            responses.POST,
+            "https://example.com/slow",
+            body=requests.exceptions.Timeout("timed out"),
+        )
+        root = JobExecutionFactory(job=job, attempt_number=1, parent_execution=None)
+
+        with django_capture_on_commit_callbacks(execute=False):
+            execute_job_execution(root.id)
+
+        assert JobExecution.objects.filter(parent_execution=root, attempt_number=2).exists()
