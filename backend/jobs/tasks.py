@@ -24,6 +24,7 @@ from celery import shared_task
 from django.db import transaction
 from django.utils import timezone
 
+from .alerts import CONDITION_CIRCUIT_OPEN, CONDITION_RETRIES_EXHAUSTED, fire_alert
 from .circuit_breaker import CircuitBreaker
 from .models import Job, JobExecution
 from .services import compute_next_fire_at, compute_retry_scheduled_for
@@ -111,6 +112,11 @@ def execute_job_execution(execution_id: int) -> dict:
             execution.public_id,
             domain,
         )
+        fire_alert(
+            job,
+            CONDITION_CIRCUIT_OPEN,
+            detail=f"Circuit open for domain {domain}; request blocked.",
+        )
         return {"status": "circuit_open", "execution_id": execution_id}
 
     execution.status = JobExecution.Status.RUNNING
@@ -186,7 +192,13 @@ def _maybe_retry(execution: JobExecution, job: Job) -> None:
             _root_id(execution),
             execution.attempt_number,
         )
-        # Phase 2.4 will fire an alert here.
+        fire_alert(
+            job,
+            CONDITION_RETRIES_EXHAUSTED,
+            detail=(
+                f"All {job.max_retries + 1} attempts failed. " f"Last status: {execution.status}."
+            ),
+        )
         return
 
     next_attempt = execution.attempt_number + 1

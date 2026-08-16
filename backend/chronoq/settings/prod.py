@@ -4,3 +4,5 @@ DEBUG = False
 SECURE_SSL_REDIRECT = True
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
+
+DEFAULT_FROM_EMAIL = "chronoq <noreply@chronoq.local>"

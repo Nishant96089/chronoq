@@ -248,3 +248,31 @@ rollback, applied manually to Redis.)
 **Verified live:** job against httpstat.us/500 tripped after 5 failures; blocked
 executions then finished instantly (no duration, no HTTP call) instead of the
 5-10s doomed calls before.
+
+## 2026-08-16 — Alerting: throttled, async, dual-channel
+
+**Problem:** Jobs failed silently. Retries-exhausted and circuit-trip were
+only visible if a user happened to check the dashboard — useless for a
+"set and forget" scheduler.
+
+**Solution:** fire_alert() on retries-exhausted and circuit-open, sending
+email + webhook.
+
+**Decisions:**
+
+- **Alert config: simple fields on Job** (alert_email, alert_webhook_url),
+  not a separate AlertRule model. Start simple; add the model when the
+  simple version actually hurts.
+- **Throttled: one alert per (job, condition) per hour** via Redis SET NX +
+  TTL. Industry standard (PagerDuty/Alertmanager dedupe) to avoid alert
+  fatigue. Critical for circuit-open, which would otherwise alert every tick.
+- **Async: send_alert is a Celery task.** Never blocks the executor; a slow
+  or failing webhook can't break a job. Channels are independent (email
+  failing doesn't stop webhook).
+- **Dev email: console backend** (prints to logs). Prod plugs in real SMTP.
+
+**Test isolation lesson:** Redis state (cb:_, alert:_) isn't rolled back like
+the DB. Consolidated cleanup into a single autouse conftest fixture flushing
+both prefixes — order-dependent failures (pass alone, fail in suite) are the
+signature of shared mutable state not being reset. celery_eager fixture runs
+tasks inline in tests.

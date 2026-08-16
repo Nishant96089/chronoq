@@ -35,6 +35,8 @@ class JobSerializer(serializers.ModelSerializer):
             "next_fire_at",
             "max_retries",
             "retry_backoff_seconds",
+            "alert_email",
+            "alert_webhook_url",
             "is_active",
             "created_at",
             "updated_at",

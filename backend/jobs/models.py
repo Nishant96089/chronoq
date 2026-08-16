@@ -60,6 +60,10 @@ class Job(models.Model):
     max_retries = models.PositiveIntegerField(default=3)
     retry_backoff_seconds = models.PositiveIntegerField(default=60)
 
+    # ===== Alerting =====
+    alert_email = models.EmailField(blank=True, default="")
+    alert_webhook_url = models.URLField(max_length=2000, blank=True, default="")
+
     # ===== Lifecycle =====
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
