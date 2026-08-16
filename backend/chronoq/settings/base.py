@@ -107,6 +107,9 @@ CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_ACKS_LATE = True
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 
+# ===== Redis (general cache / circuit breaker) =====
+REDIS_URL = env("REDIS_URL")
+
 # ===== Django REST Framework =====
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [

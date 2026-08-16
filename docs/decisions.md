@@ -14,6 +14,7 @@ about but never implemented.
 **Non-goals:** Enterprise scale, competing with Temporal, revenue.
 
 **Success criteria:**
+
 - End-to-end working system running under Docker Compose
 - Load test proving system survives 10k jobs + random pod kills
 - A written architecture doc I could defend in a senior backend interview
@@ -119,9 +120,11 @@ would create bugs I'd chase for hours. Writing them down means I can
 defend them in a senior interview when someone asks "why did you..."
 
 ---
+
 ## 2026-08-13 — Move beat schedule from DB to code (drop DatabaseScheduler)
 
 **Problem:** Two failures compounding:
+
 1. `docker compose down -v` wiped the django_celery_beat periodic task,
    so beat had nothing to dispatch.
 2. celery-beat with DatabaseScheduler crashed on boot with
@@ -133,6 +136,7 @@ and use Celery's default PersistentScheduler (dropped
 --scheduler django_celery_beat.schedulers:DatabaseScheduler).
 
 **Reasoning:**
+
 - Our beat schedule is a single fixed entry (tick every 30s). We never
   need to add/edit schedules at runtime via the admin.
 - Individual JOB schedules live in our own Job model + tick logic, not
@@ -149,6 +153,7 @@ we don't use it. django_celery_beat stays in INSTALLED_APPS for now
 React Query (TanStack) for data fetching, React Router v7, axios.
 
 **Auth: token-based, not session/cookies.**
+
 - POST /api/auth/token/ returns a DRF token; stored in localStorage.
 - axios request interceptor attaches `Authorization: Token <t>` to every call.
 - Response interceptor clears token + redirects to /login on 401.
@@ -157,11 +162,13 @@ React Query (TanStack) for data fetching, React Router v7, axios.
   browsable API.
 
 **Data layer: React Query, all API calls centralized.**
+
 - api/{client,auth,jobs}.js own HTTP; hooks/useJobs.js owns query/mutation
   logic + cache invalidation. Components never call axios directly.
 - Query keys centralized (jobKeys) so invalidation is predictable.
 
 **Live execution updates: 5s polling via refetchInterval — for now.**
+
 - Deliberately NOT WebSockets in Phase 1. Polling is simple and adequate
   for a single-user dashboard. Real-time via Django Channels is planned for
   Phase 3, where the same WS infrastructure also serves the distributed
@@ -169,6 +176,7 @@ React Query (TanStack) for data fetching, React Router v7, axios.
   meant to stay single-node-simple.
 
 **Custom modals over browser-native dialogs.**
+
 - window.confirm replaced with a styled ConfirmDialog (Modal + backdrop +
   Escape/backdrop-close). Kept HTML native `required` validation — it's
   accessible and expected, not an intrusive popup.
@@ -176,6 +184,7 @@ React Query (TanStack) for data fetching, React Router v7, axios.
 ## 2026-08-15 — Testing: on_commit + save() recompute gotchas
 
 Two test-only subtleties (production code is correct, tests must adapt):
+
 - tick() dispatches via transaction.on_commit, which never fires under
   pytest-django's rolled-back transactions. Use the
   django_capture_on_commit_callbacks fixture to let tick() complete.
@@ -196,7 +205,7 @@ walking backwards. Root becomes the stable identity for logs/alerts/dashboard
 retries under a root run. Also more robust: a chain is fragile to a broken link.
 
 **Retry timing: absolute, from root's scheduled_for.**
-retry.scheduled_for = root.scheduled_for + retry_backoff_seconds * 2^(attempt-1).
+retry.scheduled_for = root.scheduled_for + retry_backoff_seconds \* 2^(attempt-1).
 Not measured from when the failure happened.
 
 Reasoning: deterministic and testable — retry times are computable in advance,
@@ -208,3 +217,34 @@ not wall-clock). One timing model across the whole codebase.
 We create explicit JobExecution rows for each attempt (append-only audit
 trail, visible in the dashboard) rather than using Celery's opaque retry
 queue. More code, but full visibility and control.
+
+## 2026-08-16 — Circuit breaker: per-domain, Redis-backed, fail-fast
+
+**Problem:** With only retries, a permanently-dead endpoint gets hammered
+forever — every scheduled run makes N+1 doomed attempts (5-10s each). Wastes
+workers, hurts a struggling target's recovery (cascading-failure risk).
+
+**Solution:** A per-domain circuit breaker (CLOSED/OPEN/HALF_OPEN state machine).
+
+**Key decisions:**
+
+- **Per-domain, not per-job.** If api.example.com is down, ALL jobs targeting
+  it back off together. One job discovering the outage protects the rest.
+- **Redis-backed.** Checked on every execution → must be fast and shared across
+  all worker processes. DB would be too slow; in-memory wouldn't be shared.
+- **Thresholds hardcoded** (5 consecutive failures → open, 60s cooldown).
+  Could become per-job Job fields later; constants keep Phase 2 simple.
+- **Open circuit → fail fast, NO retry.** Retrying against a known-open circuit
+  is pointless. Execution finishes instantly with error="circuit_open".
+- **Single-probe half-open.** After cooldown, exactly ONE probe is allowed
+  through (Redis SET NX as a distributed mutex) — not a flood. Probe success →
+  CLOSED, probe failure → OPEN with fresh cooldown.
+
+**Testing note:** Breaker state lives in Redis, which isn't rolled back between
+tests like the DB. conftest.py has an autouse fixture flushing cb:\* keys before
+each test for isolation. (Same principle as pytest-django's DB transaction
+rollback, applied manually to Redis.)
+
+**Verified live:** job against httpstat.us/500 tripped after 5 failures; blocked
+executions then finished instantly (no duration, no HTTP call) instead of the
+5-10s doomed calls before.

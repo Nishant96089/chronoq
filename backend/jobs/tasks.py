@@ -2,13 +2,19 @@
 Celery tasks for chronoq.
 
 - tick: scheduler. Finds due jobs, creates root JobExecutions, dispatches them.
-- execute_job_execution: worker. Makes the HTTP call, records the result, and
-  on failure schedules a retry (up to Job.max_retries) with exponential backoff.
+- execute_job_execution: worker. Checks the circuit breaker, makes the HTTP
+  call, records the result, and on failure schedules a retry (unless the
+  circuit is open, in which case we fail fast with no retry).
 
 Retry model (see docs/decisions.md):
 - Star linking: every retry's parent_execution is the ROOT execution (attempt 1).
 - Absolute backoff: retry.scheduled_for = root.scheduled_for + backoff * 2^(n-2).
-- max_retries=N means up to N+1 total attempts (1 original + N retries).
+- max_retries=N means up to N+1 total attempts.
+
+Circuit breaker (see docs/decisions.md):
+- Per-domain, Redis-backed. Checked before every call.
+- OPEN -> fail fast with status=failed, error="circuit_open", NO retry.
+- Success/failure of real calls is reported to update breaker state.
 """
 
 import logging
@@ -18,6 +24,7 @@ from celery import shared_task
 from django.db import transaction
 from django.utils import timezone
 
+from .circuit_breaker import CircuitBreaker
 from .models import Job, JobExecution
 from .services import compute_next_fire_at, compute_retry_scheduled_for
 
@@ -78,7 +85,7 @@ def _schedule_one(job: Job, scheduled_for) -> None:
 
 @shared_task(name="jobs.execute_job_execution")
 def execute_job_execution(execution_id: int) -> dict:
-    """Execute one JobExecution: HTTP call, record outcome, retry on failure."""
+    """Execute one JobExecution: breaker check, HTTP call, record, maybe retry."""
     try:
         execution = JobExecution.objects.select_related("job").get(pk=execution_id)
     except JobExecution.DoesNotExist:
@@ -86,18 +93,38 @@ def execute_job_execution(execution_id: int) -> dict:
         return {"error": "not_found", "execution_id": execution_id}
 
     job = execution.job
+    breaker = CircuitBreaker()
+    domain = breaker.domain_for(job.target_url)
+
+    # --- Circuit breaker: check BEFORE doing any work ---
+    allowed, cb_state = breaker.allows_request(domain)
+    if not allowed:
+        # Circuit is OPEN and cooling down. Fail fast, do NOT retry.
+        _finish(
+            execution,
+            status=JobExecution.Status.FAILED,
+            error="circuit_open",
+        )
+        logger.warning(
+            "circuit_open blocked job=%s execution=%s domain=%s",
+            job.public_id,
+            execution.public_id,
+            domain,
+        )
+        return {"status": "circuit_open", "execution_id": execution_id}
 
     execution.status = JobExecution.Status.RUNNING
     execution.started_at = timezone.now()
     execution.save(update_fields=["status", "started_at"])
 
     logger.info(
-        "executing job=%s execution=%s attempt=%s url=%s method=%s",
+        "executing job=%s execution=%s attempt=%s url=%s method=%s cb=%s",
         job.public_id,
         execution.public_id,
         execution.attempt_number,
         job.target_url,
         job.http_method,
+        cb_state,
     )
 
     try:
@@ -109,15 +136,24 @@ def execute_job_execution(execution_id: int) -> dict:
             timeout=job.timeout_seconds,
         )
     except requests.exceptions.Timeout as e:
+        breaker.record_failure(domain)
         _finish(execution, status=JobExecution.Status.TIMEOUT, error=str(e))
         _maybe_retry(execution, job)
         return {"status": "timeout", "execution_id": execution_id}
     except requests.exceptions.RequestException as e:
+        breaker.record_failure(domain)
         _finish(execution, status=JobExecution.Status.FAILED, error=str(e))
         _maybe_retry(execution, job)
         return {"status": "failed", "execution_id": execution_id, "error": str(e)}
 
     ok = response.status_code < 400
+
+    # --- Report outcome to the breaker ---
+    if ok:
+        breaker.record_success(domain)
+    else:
+        breaker.record_failure(domain)
+
     final_status = JobExecution.Status.SUCCESS if ok else JobExecution.Status.FAILED
     _finish(
         execution,
@@ -142,7 +178,6 @@ def _maybe_retry(execution: JobExecution, job: Job) -> None:
     Schedule the next attempt if this one failed and retries remain.
 
     max_retries=N allows N retries beyond the original (up to N+1 total).
-    We retry while attempt_number <= max_retries.
     """
     if execution.attempt_number > job.max_retries:
         logger.info(
