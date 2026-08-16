@@ -107,3 +107,93 @@ class TestExecuteJobExecution:
     def test_missing_execution_returns_error(self):
         result = execute_job_execution(999999)
         assert result.get("error") == "not_found"
+
+
+class TestRetryLogic:
+    @responses.activate
+    def test_failure_schedules_retry(self, django_capture_on_commit_callbacks):
+        job = JobFactory(
+            target_url="https://example.com/hook",
+            http_method="POST",
+            max_retries=3,
+            retry_backoff_seconds=60,
+        )
+        responses.add(responses.POST, "https://example.com/hook", status=500)
+        root = JobExecutionFactory(job=job, attempt_number=1, parent_execution=None)
+
+        with django_capture_on_commit_callbacks(execute=False):
+            execute_job_execution(root.id)
+
+        # A retry (attempt 2) should have been created, pointing at the root.
+        retries = JobExecution.objects.filter(parent_execution=root)
+        assert retries.count() == 1
+        retry = retries.first()
+        assert retry.attempt_number == 2
+        assert retry.parent_execution_id == root.id
+
+    @responses.activate
+    def test_retry_uses_absolute_backoff(self, django_capture_on_commit_callbacks):
+        job = JobFactory(
+            target_url="https://example.com/hook",
+            max_retries=3,
+            retry_backoff_seconds=60,
+        )
+        responses.add(responses.POST, "https://example.com/hook", status=500)
+        root = JobExecutionFactory(job=job, attempt_number=1, parent_execution=None)
+        root_time = root.scheduled_for
+
+        with django_capture_on_commit_callbacks(execute=False):
+            execute_job_execution(root.id)
+
+        retry = JobExecution.objects.get(parent_execution=root)
+        # First retry (attempt 2): delay = 60 * 2^0 = 60s from root.scheduled_for.
+        expected = root_time + timezone.timedelta(seconds=60)
+        assert retry.scheduled_for == expected
+
+    @responses.activate
+    def test_all_retries_point_to_root(self, django_capture_on_commit_callbacks):
+        job = JobFactory(
+            target_url="https://example.com/hook",
+            max_retries=3,
+            retry_backoff_seconds=60,
+        )
+        responses.add(responses.POST, "https://example.com/hook", status=500)
+        root = JobExecutionFactory(job=job, attempt_number=1, parent_execution=None)
+
+        # Simulate attempt 2 failing → should schedule attempt 3, still pointing at root.
+        attempt2 = JobExecutionFactory(job=job, attempt_number=2, parent_execution=root)
+        with django_capture_on_commit_callbacks(execute=False):
+            execute_job_execution(attempt2.id)
+
+        attempt3 = JobExecution.objects.get(attempt_number=3)
+        assert attempt3.parent_execution_id == root.id  # star, not chain
+
+    @responses.activate
+    def test_retries_exhausted_no_more_retries(self, django_capture_on_commit_callbacks):
+        job = JobFactory(
+            target_url="https://example.com/hook",
+            max_retries=3,
+            retry_backoff_seconds=60,
+        )
+        responses.add(responses.POST, "https://example.com/hook", status=500)
+        root = JobExecutionFactory(job=job, attempt_number=1, parent_execution=None)
+        # attempt_number 4 > max_retries 3 → should NOT schedule another.
+        final = JobExecutionFactory(job=job, attempt_number=4, parent_execution=root)
+
+        with django_capture_on_commit_callbacks(execute=False):
+            execute_job_execution(final.id)
+
+        # No attempt 5 created.
+        assert not JobExecution.objects.filter(attempt_number=5).exists()
+
+    @responses.activate
+    def test_success_schedules_no_retry(self, django_capture_on_commit_callbacks):
+        job = JobFactory(target_url="https://example.com/hook", max_retries=3)
+        responses.add(responses.POST, "https://example.com/hook", status=200)
+        root = JobExecutionFactory(job=job, attempt_number=1, parent_execution=None)
+
+        with django_capture_on_commit_callbacks(execute=False):
+            execute_job_execution(root.id)
+
+        # Success → no retry.
+        assert JobExecution.objects.filter(parent_execution=root).count() == 0

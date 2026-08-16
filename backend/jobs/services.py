@@ -41,3 +41,26 @@ def validate_cron_expression(cron_expression: str) -> None:
     """
     if not croniter.is_valid(cron_expression):
         raise ValueError(f"Invalid cron expression: {cron_expression!r}")
+
+
+def compute_retry_scheduled_for(root_scheduled_for, attempt_number, backoff_seconds):
+    """
+    Compute the scheduled_for time of a retry attempt.
+
+    Uses exponential backoff measured absolutely from the ROOT execution's
+    scheduled_for — not from when the failure occurred. Keeps retry timing
+    deterministic and testable.
+
+    Formula: root_scheduled_for + backoff_seconds * 2^(attempt_number - 2)
+      - attempt_number 2 (first retry): delay = backoff * 2^0 = backoff
+      - attempt_number 3: delay = backoff * 2^1 = 2 * backoff
+      - attempt_number 4: delay = backoff * 2^2 = 4 * backoff
+    """
+    from datetime import timedelta
+
+    if attempt_number < 2:
+        raise ValueError("Retries start at attempt_number 2")
+
+    multiplier = 2 ** (attempt_number - 2)
+    delay = timedelta(seconds=backoff_seconds * multiplier)
+    return root_scheduled_for + delay

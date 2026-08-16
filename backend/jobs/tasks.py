@@ -1,16 +1,14 @@
 """
 Celery tasks for chronoq.
 
-Two tasks power Phase 1:
+- tick: scheduler. Finds due jobs, creates root JobExecutions, dispatches them.
+- execute_job_execution: worker. Makes the HTTP call, records the result, and
+  on failure schedules a retry (up to Job.max_retries) with exponential backoff.
 
-- ``tick`` — the scheduler. Runs periodically via Celery Beat. Finds jobs whose
-  next_fire_at has arrived, creates JobExecution rows, dispatches execution.
-
-- ``execute_job_execution`` — the worker. Takes a JobExecution id, makes the
-  HTTP call, records the result. Updates the parent Job's next_fire_at when done.
-
-Phase 1 is single-node — no distributed locking, no retries, no circuit breaker.
-Phase 2 adds retries + timeouts. Phase 3 adds distributed leader election.
+Retry model (see docs/decisions.md):
+- Star linking: every retry's parent_execution is the ROOT execution (attempt 1).
+- Absolute backoff: retry.scheduled_for = root.scheduled_for + backoff * 2^(n-2).
+- max_retries=N means up to N+1 total attempts (1 original + N retries).
 """
 
 import logging
@@ -21,39 +19,19 @@ from django.db import transaction
 from django.utils import timezone
 
 from .models import Job, JobExecution
-from .services import compute_next_fire_at
+from .services import compute_next_fire_at, compute_retry_scheduled_for
 
 logger = logging.getLogger(__name__)
 
-# When tick runs, it considers jobs whose next_fire_at is within this window
-# from "now". Slightly wider than the beat interval so nothing slips through
-# the cracks if a tick runs late.
 TICK_LOOKAHEAD_SECONDS = 45
 
 
 @shared_task(name="jobs.tick")
 def tick() -> dict:
-    """
-    Scheduler tick. Finds due jobs and enqueues them for execution.
-
-    Runs every 30s via Celery Beat. Returns a small summary dict for
-    observability (log lines will show it).
-
-    Design notes:
-    - We compute an in-memory 'now'. Jobs due within TICK_LOOKAHEAD_SECONDS
-      are considered ready. This absorbs a few seconds of clock skew or
-      tick jitter.
-    - Each due job gets a JobExecution row created (status=pending) inside
-      a transaction, then dispatched via .delay() AFTER commit so the
-      worker can't pick it up before the row is visible.
-    - We update the Job's next_fire_at immediately so a subsequent tick
-      before this execution completes won't fire it again.
-    """
+    """Scheduler tick. Finds due jobs and enqueues them for execution."""
     now = timezone.now()
     cutoff = now + timezone.timedelta(seconds=TICK_LOOKAHEAD_SECONDS)
 
-    # Fetch due jobs. The composite index (is_active, next_fire_at) makes
-    # this a fast range scan even at 100k jobs.
     due_jobs = list(
         Job.objects.filter(
             is_active=True,
@@ -68,50 +46,39 @@ def tick() -> dict:
             _schedule_one(job, scheduled_for=job.next_fire_at)
             dispatched += 1
         except Exception:
-            # Never let one bad job break the whole tick.
             logger.exception("Failed to schedule job id=%s", job.id)
 
-    result = {"now": now.isoformat(), "considered": len(due_jobs), "dispatched": dispatched}
+    result = {
+        "now": now.isoformat(),
+        "considered": len(due_jobs),
+        "dispatched": dispatched,
+    }
     logger.info("tick complete: %s", result)
     return result
 
 
 def _schedule_one(job: Job, scheduled_for) -> None:
-    """
-    Create a JobExecution and dispatch the executor task.
-
-    Transactionally: create the execution row and update the Job's
-    next_fire_at. Dispatch the Celery task only AFTER commit — otherwise
-    a worker could pick up the id before the row is visible to other DB
-    connections.
-    """
+    """Create a root JobExecution (attempt 1) and dispatch the executor."""
     with transaction.atomic():
         execution = JobExecution.objects.create(
             job=job,
             scheduled_for=scheduled_for,
             status=JobExecution.Status.PENDING,
+            attempt_number=1,
+            parent_execution=None,
         )
-        # Advance the schedule so the same fire time can't be picked up again.
-        # We compute the NEXT fire time relative to the one we just consumed,
-        # not to "now", so we don't drift.
         try:
             job.next_fire_at = compute_next_fire_at(job.schedule_cron, after=scheduled_for)
             Job.objects.filter(pk=job.pk).update(next_fire_at=job.next_fire_at)
         except ValueError:
             logger.error("Invalid cron on job id=%s: %r", job.id, job.schedule_cron)
 
-    # Dispatch AFTER the transaction commits. on_commit ensures ordering.
     transaction.on_commit(lambda: execute_job_execution.delay(execution.id))
 
 
 @shared_task(name="jobs.execute_job_execution")
 def execute_job_execution(execution_id: int) -> dict:
-    """
-    Execute one JobExecution: make the HTTP call, record the outcome.
-
-    Runs inside a Celery worker. We update the execution's status in stages
-    so an observer (dashboard, admin) sees pending -> running -> success/failed.
-    """
+    """Execute one JobExecution: HTTP call, record outcome, retry on failure."""
     try:
         execution = JobExecution.objects.select_related("job").get(pk=execution_id)
     except JobExecution.DoesNotExist:
@@ -120,15 +87,15 @@ def execute_job_execution(execution_id: int) -> dict:
 
     job = execution.job
 
-    # Transition to running.
     execution.status = JobExecution.Status.RUNNING
     execution.started_at = timezone.now()
     execution.save(update_fields=["status", "started_at"])
 
     logger.info(
-        "executing job=%s execution=%s url=%s method=%s",
+        "executing job=%s execution=%s attempt=%s url=%s method=%s",
         job.public_id,
         execution.public_id,
+        execution.attempt_number,
         job.target_url,
         job.http_method,
     )
@@ -143,12 +110,13 @@ def execute_job_execution(execution_id: int) -> dict:
         )
     except requests.exceptions.Timeout as e:
         _finish(execution, status=JobExecution.Status.TIMEOUT, error=str(e))
+        _maybe_retry(execution, job)
         return {"status": "timeout", "execution_id": execution_id}
     except requests.exceptions.RequestException as e:
         _finish(execution, status=JobExecution.Status.FAILED, error=str(e))
+        _maybe_retry(execution, job)
         return {"status": "failed", "execution_id": execution_id, "error": str(e)}
 
-    # Any 2xx / 3xx is success. 4xx / 5xx is a failed HTTP call.
     ok = response.status_code < 400
     final_status = JobExecution.Status.SUCCESS if ok else JobExecution.Status.FAILED
     _finish(
@@ -158,11 +126,72 @@ def execute_job_execution(execution_id: int) -> dict:
         response_body=response.text,
         error=None if ok else f"HTTP {response.status_code}",
     )
+
+    if not ok:
+        _maybe_retry(execution, job)
+
     return {
         "status": final_status,
         "execution_id": execution_id,
         "http_status_code": response.status_code,
     }
+
+
+def _maybe_retry(execution: JobExecution, job: Job) -> None:
+    """
+    Schedule the next attempt if this one failed and retries remain.
+
+    max_retries=N allows N retries beyond the original (up to N+1 total).
+    We retry while attempt_number <= max_retries.
+    """
+    if execution.attempt_number > job.max_retries:
+        logger.info(
+            "retries exhausted job=%s root=%s attempts=%s",
+            job.public_id,
+            _root_id(execution),
+            execution.attempt_number,
+        )
+        # Phase 2.4 will fire an alert here.
+        return
+
+    next_attempt = execution.attempt_number + 1
+    root = _root_execution(execution)
+    retry_scheduled_for = compute_retry_scheduled_for(
+        root.scheduled_for, next_attempt, job.retry_backoff_seconds
+    )
+
+    with transaction.atomic():
+        retry = JobExecution.objects.create(
+            job=job,
+            scheduled_for=retry_scheduled_for,
+            status=JobExecution.Status.PENDING,
+            attempt_number=next_attempt,
+            parent_execution=root,
+        )
+
+    def _dispatch():
+        execute_job_execution.apply_async(args=[retry.id], eta=retry_scheduled_for)
+
+    transaction.on_commit(_dispatch)
+
+    logger.info(
+        "scheduled retry job=%s root=%s attempt=%s at=%s",
+        job.public_id,
+        root.public_id,
+        next_attempt,
+        retry_scheduled_for.isoformat(),
+    )
+
+
+def _root_execution(execution: JobExecution) -> JobExecution:
+    """Return the root execution (attempt 1) for a given execution."""
+    if execution.parent_execution_id is None:
+        return execution
+    return execution.parent_execution
+
+
+def _root_id(execution: JobExecution):
+    return _root_execution(execution).public_id
 
 
 def _finish(
@@ -173,7 +202,7 @@ def _finish(
     response_body: str = "",
     error: str | None = None,
 ) -> None:
-    """Record final state of an execution. Truncation handled by model.save()."""
+    """Record final state of an execution."""
     execution.status = status
     execution.finished_at = timezone.now()
     if http_status_code is not None:

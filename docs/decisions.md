@@ -182,3 +182,29 @@ Two test-only subtleties (production code is correct, tests must adapt):
 - Job.save() recomputes next_fire_at from cron, overriding any value
   passed to the factory. Tests that need a specific next_fire_at set it
   via Job.objects.filter().update() to bypass save().
+
+## 2026-08-15 — Retry model: star linking + absolute backoff timing
+
+**Retry linking: star, not chain.**
+Every retry's parent_execution points to the ROOT execution (attempt 1),
+not the immediately-preceding attempt. attempt_number gives the sequence.
+
+Reasoning: the most common query is "what happened with this run?" — with a
+star that's one query (parent_id = root OR id = root). A chain would require
+walking backwards. Root becomes the stable identity for logs/alerts/dashboard
+("Run X failed after 3 attempts"). Matches how Temporal / Step Functions group
+retries under a root run. Also more robust: a chain is fragile to a broken link.
+
+**Retry timing: absolute, from root's scheduled_for.**
+retry.scheduled_for = root.scheduled_for + retry_backoff_seconds * 2^(attempt-1).
+Not measured from when the failure happened.
+
+Reasoning: deterministic and testable — retry times are computable in advance,
+independent of how long an attempt took or how backed-up the queue is.
+Consistent with Phase 1's drift-free scheduling (advance from scheduled time,
+not wall-clock). One timing model across the whole codebase.
+
+**Retry logic is ours, not Celery's self.retry().**
+We create explicit JobExecution rows for each attempt (append-only audit
+trail, visible in the dashboard) rather than using Celery's opaque retry
+queue. More code, but full visibility and control.

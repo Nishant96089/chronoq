@@ -47,3 +47,43 @@ class TestValidateCronExpression:
     def test_invalid_raises_valueerror(self):
         with pytest.raises(ValueError):
             validate_cron_expression("nonsense")
+
+
+class TestComputeRetryScheduledFor:
+    def test_first_retry_one_backoff(self):
+        from datetime import UTC, datetime, timedelta
+
+        from jobs.services import compute_retry_scheduled_for
+
+        root = datetime(2026, 1, 1, 6, 0, 0, tzinfo=UTC)
+        result = compute_retry_scheduled_for(root, attempt_number=2, backoff_seconds=60)
+        assert result == root + timedelta(seconds=60)
+
+    def test_second_retry_double_backoff(self):
+        from datetime import UTC, datetime, timedelta
+
+        from jobs.services import compute_retry_scheduled_for
+
+        root = datetime(2026, 1, 1, 6, 0, 0, tzinfo=UTC)
+        result = compute_retry_scheduled_for(root, attempt_number=3, backoff_seconds=60)
+        assert result == root + timedelta(seconds=120)
+
+    def test_third_retry_quadruple_backoff(self):
+        from datetime import UTC, datetime, timedelta
+
+        from jobs.services import compute_retry_scheduled_for
+
+        root = datetime(2026, 1, 1, 6, 0, 0, tzinfo=UTC)
+        result = compute_retry_scheduled_for(root, attempt_number=4, backoff_seconds=60)
+        assert result == root + timedelta(seconds=240)
+
+    def test_attempt_one_raises(self):
+        from datetime import UTC, datetime
+
+        import pytest
+
+        from jobs.services import compute_retry_scheduled_for
+
+        root = datetime(2026, 1, 1, 6, 0, 0, tzinfo=UTC)
+        with pytest.raises(ValueError):
+            compute_retry_scheduled_for(root, attempt_number=1, backoff_seconds=60)
