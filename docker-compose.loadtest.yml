@@ -1,0 +1,19 @@
+# Overrides for load testing: run Django under gunicorn (multi-worker)
+# instead of the single-threaded dev runserver.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.loadtest.yml up -d django
+#   docker compose run --rm k6 run /scripts/load.js
+#
+# Revert to normal dev:
+#   docker compose up -d --force-recreate django
+
+services:
+  django:
+    command: >
+      gunicorn chronoq.wsgi:application
+      --bind 0.0.0.0:8000
+      --workers 4
+      --threads 2
+      --timeout 60
+      --access-logfile -

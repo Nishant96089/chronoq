@@ -87,6 +87,19 @@ services:
     networks:
       - chronoq-net
 
+  k6:
+    image: grafana/k6:latest
+    volumes:
+      - ./loadtest:/scripts
+    networks:
+      - chronoq-net
+    # Don't start with `up`; run explicitly via `docker compose run k6 ...`
+    profiles:
+      - loadtest
+    # Let k6 reach the API by its compose service name.
+    environment:
+      - API_BASE=http://django:8000
+
 volumes:
   postgres-data:
   redis-data:

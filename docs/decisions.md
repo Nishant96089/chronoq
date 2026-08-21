@@ -276,3 +276,33 @@ the DB. Consolidated cleanup into a single autouse conftest fixture flushing
 both prefixes — order-dependent failures (pass alone, fail in suite) are the
 signature of shared mutable state not being reset. celery_eager fixture runs
 tasks inline in tests.
+
+## 2026-08-21 — Load test #1: dev server was the bottleneck
+
+**Method:** k6, ramp 10→50→100 VUs over 100s, hitting GET+POST /api/jobs/.
+Threshold p95 < 1s.
+
+**First run (runserver):** FAILED. p95=2.86s, throughput plateaued at ~50 req/s
+regardless of VU count, 0 errors (requests queued, didn't fail). DB connections
+peaked at 79/100 — NOT exhausted. List reads (p95=2.99s) far worse than writes
+(p95=981ms) because list responses are ~11KB vs 445B writes.
+
+**Diagnosis:** single-threaded `runserver` was the bottleneck. Throughput
+plateau + rising latency + zero errors = queue behind one thread. My initial
+guess (DB connection exhaustion) was WRONG — measuring corrected it.
+
+**Fix:** run gunicorn (4 workers × 2 threads) via docker-compose.loadtest.yml.
+
+**Second run (gunicorn):** PASSED. p95=916ms (3.1× better), throughput 70 req/s
+(+39%), 8499 reqs (+67%), 0 errors. DB connections peaked at only 9 —
+counterintuitively LOWER, because faster request handling means connections
+are held for less time even at higher throughput.
+
+**Also added:** CONN_MAX_AGE=60 (persist DB connections across requests;
+standard prod setting).
+
+**Lesson:** measure before optimizing. The real bottleneck (server concurrency)
+was upstream of the guessed one (DB). Never load-test against runserver.
+
+**Deferred to Phase 3:** the 21s max-latency tail (ramp/cold-start outliers)
+and the 11KB list-response size (trim serializer fields / query optimization).
