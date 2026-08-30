@@ -108,6 +108,12 @@ CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_ACKS_LATE = True
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 
+# ===== Scheduler jitter =====
+# Spread scheduled dispatches over a random 0..N second window to avoid the
+# thundering herd when many jobs share the same cron time (e.g. 0 * * * *).
+# Applies ONLY to scheduled dispatches — not manual triggers or retries.
+SCHEDULER_JITTER_SECONDS = env.int("SCHEDULER_JITTER_SECONDS", default=15)
+
 # ===== Redis (general cache / circuit breaker) =====
 REDIS_URL = env("REDIS_URL")
 

@@ -6,6 +6,7 @@ and reuse from scheduler tasks, views, and management commands.
 """
 
 import contextlib
+import random
 from datetime import datetime
 
 from croniter import croniter
@@ -105,3 +106,23 @@ def scheduler_leadership():
         if acquired:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT pg_advisory_unlock(%s)", [SCHEDULER_LOCK_ID])
+
+
+def compute_jitter_seconds(max_jitter_seconds=None):
+    """
+    Return a random dispatch delay in [0, max_jitter_seconds] to spread
+    scheduled executions and avoid the thundering herd.
+
+    Reads SCHEDULER_JITTER_SECONDS from settings when max_jitter_seconds is
+    not given. Returns 0 if jitter is disabled (max <= 0), so it's a no-op
+    for anyone who turns it off.
+    """
+    from django.conf import settings
+
+    if max_jitter_seconds is None:
+        max_jitter_seconds = getattr(settings, "SCHEDULER_JITTER_SECONDS", 0)
+
+    if not max_jitter_seconds or max_jitter_seconds <= 0:
+        return 0.0
+
+    return random.uniform(0, max_jitter_seconds)

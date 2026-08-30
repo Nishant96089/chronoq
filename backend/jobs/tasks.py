@@ -28,6 +28,7 @@ from .alerts import CONDITION_CIRCUIT_OPEN, CONDITION_RETRIES_EXHAUSTED, fire_al
 from .circuit_breaker import CircuitBreaker
 from .models import Job, JobExecution
 from .services import (
+    compute_jitter_seconds,
     compute_next_fire_at,
     compute_retry_scheduled_for,
     scheduler_leadership,
@@ -95,7 +96,10 @@ def _schedule_one(job: Job, scheduled_for) -> None:
         except ValueError:
             logger.error("Invalid cron on job id=%s: %r", job.id, job.schedule_cron)
 
-    transaction.on_commit(lambda: execute_job_execution.delay(execution.id))
+    jitter = compute_jitter_seconds()
+    transaction.on_commit(
+        lambda: execute_job_execution.apply_async(args=[execution.id], countdown=jitter)
+    )
 
 
 @shared_task(name="jobs.execute_job_execution")

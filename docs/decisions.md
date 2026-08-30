@@ -361,3 +361,30 @@ the concept cleanly with trivial overhead (~15ms per skipped tick).
 **Verified live:** 3 workers + 3 beats, only one schedules per cycle (job fires
 once, not 3×); killed nodes covered by survivors automatically; leadership
 rotates across workers based on who grabs the lock first.
+
+## 2026-08-30 — Jittered scheduling (thundering-herd mitigation)
+
+**Problem:** Cron schedules cluster at round times (0 * * * *, 0 0 * * *). Many
+jobs due at the same instant → tick() dispatches them all at once → worker
+saturation, downstream hammering (can trip our own circuit breaker), resource
+spikes at :00, idle otherwise.
+
+**Solution:** jitter the DISPATCH — random countdown in [0, N] seconds when
+sending a scheduled execution to the worker (apply_async countdown=jitter).
+
+**Decisions:**
+- **Global setting** (SCHEDULER_JITTER_SECONDS, default 15), not per-job. Jitter
+  is an operator concern (protect the pool + downstreams), not a user concern.
+  Industry standard (AWS EventBridge, k8s CronJob spread) treats it as platform
+  behavior. Add per-job later only if a real need appears.
+- **Jitter dispatch, not schedule.** The user's cron time stays truthful —
+  scheduled_for is still the exact cron instant; only the actual execution is
+  smeared. Jittering next_fire_at would corrupt the stated schedule.
+- **Scheduled dispatches only.** NOT manual triggers (user is watching, fire
+  now) and NOT retries (already spread by deterministic exponential backoff;
+  jitter would muddy the tested timing). Verified by test_retry_uses_eta_not_jitter.
+- **Disabled = 0 → no-op** (set SCHEDULER_JITTER_SECONDS=0 for exact old behavior).
+
+**Verified:** jobs sharing a cron minute have identical scheduled_for but
+started_at spread across the jitter window; 7 unit tests cover range, spread,
+disable, and retry-exclusion.
