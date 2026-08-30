@@ -5,9 +5,11 @@ Keeping business logic out of models makes it easier to test in isolation
 and reuse from scheduler tasks, views, and management commands.
 """
 
+import contextlib
 from datetime import datetime
 
 from croniter import croniter
+from django.db import connection
 from django.utils import timezone
 
 
@@ -64,3 +66,42 @@ def compute_retry_scheduled_for(root_scheduled_for, attempt_number, backoff_seco
     multiplier = 2 ** (attempt_number - 2)
     delay = timedelta(seconds=backoff_seconds * multiplier)
     return root_scheduled_for + delay
+
+
+# A fixed, arbitrary 64-bit integer identifying the scheduler leader lock.
+# All scheduler nodes contend for THIS specific advisory lock. The number is
+# arbitrary but must be the same across all nodes (it's the lock's identity).
+SCHEDULER_LOCK_ID = 947218364501
+
+
+@contextlib.contextmanager
+def scheduler_leadership():
+    """
+    Context manager that acquires the scheduler advisory lock if available.
+
+    Yields True if this process became leader (got the lock), False otherwise.
+    Releases the lock on exit if it was held.
+
+    Usage:
+        with scheduler_leadership() as is_leader:
+            if is_leader:
+                run_the_tick()
+
+    Uses pg_try_advisory_lock (non-blocking): returns immediately with
+    True/False rather than waiting for the lock. A non-leader tick should
+    skip, not queue up behind the leader.
+
+    The lock is session-scoped (tied to this DB connection). If this process
+    dies while holding it, Postgres releases it automatically — that's what
+    gives us free, fast failover.
+    """
+    acquired = False
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT pg_try_advisory_lock(%s)", [SCHEDULER_LOCK_ID])
+        acquired = cursor.fetchone()[0]
+    try:
+        yield acquired
+    finally:
+        if acquired:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT pg_advisory_unlock(%s)", [SCHEDULER_LOCK_ID])

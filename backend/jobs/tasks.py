@@ -27,7 +27,11 @@ from django.utils import timezone
 from .alerts import CONDITION_CIRCUIT_OPEN, CONDITION_RETRIES_EXHAUSTED, fire_alert
 from .circuit_breaker import CircuitBreaker
 from .models import Job, JobExecution
-from .services import compute_next_fire_at, compute_retry_scheduled_for
+from .services import (
+    compute_next_fire_at,
+    compute_retry_scheduled_for,
+    scheduler_leadership,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,33 +40,43 @@ TICK_LOOKAHEAD_SECONDS = 45
 
 @shared_task(name="jobs.tick")
 def tick() -> dict:
-    """Scheduler tick. Finds due jobs and enqueues them for execution."""
-    now = timezone.now()
-    cutoff = now + timezone.timedelta(seconds=TICK_LOOKAHEAD_SECONDS)
+    """
+    Scheduler tick. Only the leader (holder of the Postgres advisory lock)
+    actually schedules. Non-leaders skip — this is what makes it safe to run
+    multiple scheduler nodes without double-firing every job.
+    """
+    with scheduler_leadership() as is_leader:
+        if not is_leader:
+            logger.info("tick: NOT leader, skipping")  # INFO so it's visible
+            return {"leader": False, "considered": 0, "dispatched": 0}
 
-    due_jobs = list(
-        Job.objects.filter(
-            is_active=True,
-            next_fire_at__isnull=False,
-            next_fire_at__lte=cutoff,
-        ).only("id", "public_id", "schedule_cron", "next_fire_at")
-    )
+        now = timezone.now()
+        cutoff = now + timezone.timedelta(seconds=TICK_LOOKAHEAD_SECONDS)
 
-    dispatched = 0
-    for job in due_jobs:
-        try:
-            _schedule_one(job, scheduled_for=job.next_fire_at)
-            dispatched += 1
-        except Exception:
-            logger.exception("Failed to schedule job id=%s", job.id)
+        due_jobs = list(
+            Job.objects.filter(
+                is_active=True,
+                next_fire_at__isnull=False,
+                next_fire_at__lte=cutoff,
+            ).only("id", "public_id", "schedule_cron", "next_fire_at")
+        )
 
-    result = {
-        "now": now.isoformat(),
-        "considered": len(due_jobs),
-        "dispatched": dispatched,
-    }
-    logger.info("tick complete: %s", result)
-    return result
+        dispatched = 0
+        for job in due_jobs:
+            try:
+                _schedule_one(job, scheduled_for=job.next_fire_at)
+                dispatched += 1
+            except Exception:
+                logger.exception("Failed to schedule job id=%s", job.id)
+
+        result = {
+            "leader": True,
+            "now": now.isoformat(),
+            "considered": len(due_jobs),
+            "dispatched": dispatched,
+        }
+        logger.info("tick complete (leader): %s", result)
+        return result
 
 
 def _schedule_one(job: Job, scheduled_for) -> None:

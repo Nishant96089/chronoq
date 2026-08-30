@@ -306,3 +306,58 @@ was upstream of the guessed one (DB). Never load-test against runserver.
 
 **Deferred to Phase 3:** the 21s max-latency tail (ramp/cold-start outliers)
 and the 11KB list-response size (trim serializer fields / query optimization).
+
+## 2026-08-21 — Leader election: Postgres advisory lock, re-contest per tick
+
+**Problem:** The scheduler had a single point of failure — exactly one
+celery-beat could run. Two beats → every job fires twice (both run tick()).
+One beat dies → nothing schedules. Can't scale the scheduler horizontally.
+
+**Solution:** Multiple scheduler nodes; a Postgres advisory lock ensures
+exactly one runs tick() per cycle.
+
+**Mechanism: Postgres advisory locks.**
+- pg_try_advisory_lock(id) is atomic — exactly one connection gets it, no race.
+- Session-scoped: if the lock holder's DB connection dies (node crash), Postgres
+  releases it AUTOMATICALLY. No timeout, no lease expiry to tune. The connection
+  lifetime IS the lease; the DB is the failure detector.
+- Zero new infrastructure (vs Zookeeper/etcd). Avoids the Redlock safety debate
+  (Kleppmann) since the lock is tied to a live connection, not a timeout.
+
+**Model: re-contest every tick, not hold-until-death.**
+- Kubernetes/etcd use hold-with-renewal leases — right when leadership is
+  long-lived and coordinates ongoing work.
+- Our leader's job is tiny + periodic (~50ms every 30s). Re-contesting each
+  tick is the industry match for periodic-batch coordination. No renewal timers
+  to tune. Advisory-lock auto-release already gives fast failover for free.
+
+**Per tick:** try_acquire lock → if leader, run tick() then release → else skip.
+
+## 2026-08-22 — Leader election: Postgres advisory lock, re-contest per tick
+
+**Problem:** The scheduler had a single point of failure — only one celery-beat
+could safely run. Two beats → every job fires twice (both run tick()). One beat
+dies → nothing schedules. Couldn't scale the scheduler horizontally.
+
+**Mechanism: Postgres advisory locks.**
+- pg_try_advisory_lock(id) is atomic — exactly one connection gets it, no race.
+- Session-scoped: if the holder's DB connection dies (node crash), Postgres
+  releases it automatically. No timeout/lease to tune — the connection lifetime
+  IS the lease, the DB is the failure detector.
+- Zero new infra (vs Zookeeper/etcd). Avoids the Redlock safety debate
+  (Kleppmann) since the lock is tied to a live connection, not a timeout.
+
+**Model: re-contest every tick, not hold-until-death.** The leader's job is tiny
++ periodic (~15ms every 30s) — re-contesting each tick is the industry match for
+periodic-batch coordination. No renewal timers. Advisory-lock auto-release gives
+fast failover for free.
+
+**Design note:** the leadership gate is at tick EXECUTION (worker), not dispatch
+(beat). All beats dispatch tick tasks; workers contend for the lock; one wins,
+others skip. Correct but slightly wasteful (multiple tick tasks per cycle). A
+coarser-grained election would be more elegant; the current design demonstrates
+the concept cleanly with trivial overhead (~15ms per skipped tick).
+
+**Verified live:** 3 workers + 3 beats, only one schedules per cycle (job fires
+once, not 3×); killed nodes covered by survivors automatically; leadership
+rotates across workers based on who grabs the lock first.
