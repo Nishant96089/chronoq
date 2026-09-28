@@ -125,6 +125,11 @@ class JobExecution(models.Model):
         FAILED = "failed", "Failed"
         TIMEOUT = "timeout", "Timeout"
 
+        @classmethod
+        def terminal_states(cls):
+            """States where the execution is finished — no further processing."""
+            return frozenset({cls.SUCCESS, cls.FAILED, cls.TIMEOUT})
+
     # ===== Identity =====
     id = models.BigAutoField(primary_key=True)
     public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, db_index=True)

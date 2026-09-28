@@ -111,6 +111,23 @@ def execute_job_execution(execution_id: int) -> dict:
         logger.error("execute_job_execution: no such execution id=%s", execution_id)
         return {"error": "not_found", "execution_id": execution_id}
 
+    # --- At-least-once redelivery guard ---
+    # With acks_late, a task can be redelivered if its worker died. If this
+    # execution already reached a terminal state (the worker crashed AFTER
+    # recording the result but BEFORE acking), re-processing would redo the
+    # HTTP call and overwrite the result. Skip — the work is already done.
+    if execution.status in JobExecution.Status.terminal_states():
+        logger.info(
+            "execute_job_execution: execution=%s already terminal (%s), skipping redelivery",
+            execution.public_id,
+            execution.status,
+        )
+        return {
+            "status": "already_done",
+            "execution_id": execution_id,
+            "final_status": execution.status,
+        }
+
     job = execution.job
     breaker = CircuitBreaker()
     domain = breaker.domain_for(job.target_url)

@@ -388,3 +388,36 @@ sending a scheduled execution to the worker (apply_async countdown=jitter).
 **Verified:** jobs sharing a cron minute have identical scheduled_for but
 started_at spread across the jitter window; 7 unit tests cover range, spread,
 disable, and retry-exclusion.
+
+## 2026-09-28 — At-least-once delivery: worker-crash correctness
+
+**Guarantee:** at-least-once (never lose a job; may run twice). Correct for a
+scheduler — better to double-fire a webhook than silently skip a critical job.
+Exactly-once is impossible in a distributed system with crashes (Two Generals).
+
+**Celery config (all in base.py):**
+- task_acks_late=True — ack AFTER completion, so a crashed worker's task is
+  redelivered, not lost.
+- task_reject_on_worker_lost=True — requeue an in-flight task when the worker is
+  KILLED (not just on error). Without it, acks_late alone can still lose a task
+  on hard-kill/OOM. **Tradeoff:** a task that reliably crashes its worker becomes
+  a poison pill that loops. Accepted here — our task is a bounded HTTP call, not
+  something that hard-crashes workers. (Dead-letter/retry-cap is the real fix,
+  deferred.)
+- worker_prefetch_multiplier=1 — hold one task at a time so acks_late behaves
+  predictably (no prefetched-but-unrun tasks stuck on a dead worker).
+- broker_transport_options={visibility_timeout: 3600} — Redis has no native
+  ack/redelivery; Celery emulates it. A taken task is invisible for this long;
+  if unacked, it's redelivered. Must exceed our longest task (jobs cap well
+  under 1h).
+
+**Row-duplication correctness (our design):** tick() creates the JobExecution
+row; the executor is keyed by execution_id and only fills it in. So a redelivery
+re-processes the SAME row — never a duplicate row for one logical run. Added a
+terminal-state guard: redelivery of a success/failed/timeout execution is a
+no-op (handles "crashed after recording, before ack"). pending/running re-run
+(handles "crashed before/mid work").
+
+**The duplicate that remains** (crashed mid-HTTP-call → call happens twice) is
+inherent to at-least-once and is handled RECEIVER-side by idempotency
+(X-Job-Execution-Id, next step), not sender-side.

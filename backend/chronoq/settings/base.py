@@ -107,6 +107,20 @@ CELERY_TIMEZONE = "UTC"
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_ACKS_LATE = True
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+# ===== At-least-once delivery hardening =====
+# Requeue an in-flight task if its worker is LOST (killed/OOM), not just on
+# error. Pairs with acks_late: without this, a hard-killed worker's task can
+# still be lost. Tradeoff: a task that reliably crashes its worker becomes a
+# "poison pill" that loops — acceptable here since our task is a bounded HTTP
+# call, not something that hard-crashes workers.
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
+
+# Redis has no native ack/redelivery — Celery emulates it. A task taken by a
+# worker is "invisible" for this many seconds; if not acked by then, Celery
+# assumes the worker died and redelivers. Must exceed our longest possible task
+# (job timeout + overhead). Our jobs cap at ~timeout_seconds; 3600s default is
+# plenty, but we set it explicitly for clarity.
+CELERY_BROKER_TRANSPORT_OPTIONS = {"visibility_timeout": 3600}
 
 # ===== Scheduler jitter =====
 # Spread scheduled dispatches over a random 0..N second window to avoid the
