@@ -26,4 +26,6 @@ extend-exclude = '''
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "chronoq.settings.dev"
 python_files = ["test_*.py", "*_test.py"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 addopts = "-ra --strict-markers"

@@ -27,6 +27,7 @@ from django.utils import timezone
 from .alerts import CONDITION_CIRCUIT_OPEN, CONDITION_RETRIES_EXHAUSTED, fire_alert
 from .circuit_breaker import CircuitBreaker
 from .models import Job, JobExecution
+from .realtime import publish_execution_update
 from .services import (
     compute_jitter_seconds,
     compute_next_fire_at,
@@ -157,6 +158,7 @@ def execute_job_execution(execution_id: int) -> dict:
     execution.status = JobExecution.Status.RUNNING
     execution.started_at = timezone.now()
     execution.save(update_fields=["status", "started_at"])
+    publish_execution_update(execution)
 
     logger.info(
         "executing job=%s execution=%s attempt=%s url=%s method=%s cb=%s",
@@ -320,3 +322,4 @@ def _finish(
         status,
         http_status_code,
     )
+    publish_execution_update(execution)

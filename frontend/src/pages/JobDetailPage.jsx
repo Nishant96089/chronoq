@@ -11,6 +11,9 @@ import Layout from "../components/Layout";
 import ExecutionTable from "../components/ExecutionTable";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { formatDateTime } from "../utils/time";
+import { useQueryClient } from "@tanstack/react-query";
+import { useExecutionSocket } from "../hooks/useExecutionSocket";
+import { jobKeys } from "../hooks/useJobs";
 
 function DetailRow({ label, children }) {
   return (
@@ -27,7 +30,19 @@ export default function JobDetailPage() {
 
   const { data: job, isLoading, isError } = useJob(publicId);
   const { data: execData, isRefetching } = useJobExecutions(publicId, {
-    refetchInterval: 5000,
+    // WebSocket drives real-time updates; this slow poll is a fallback in case
+    // the socket drops and misses events.
+    refetchInterval: 30000,
+  });
+
+  const queryClient = useQueryClient();
+
+  // Live updates via WebSocket. On each update, refetch executions so the
+  // table reflects the new state immediately.
+  const { status: wsStatus } = useExecutionSocket(publicId, {
+    onUpdate: () => {
+      queryClient.invalidateQueries({ queryKey: jobKeys.executions(publicId) });
+    },
   });
 
   const triggerJob = useTriggerJob();
@@ -150,9 +165,23 @@ export default function JobDetailPage() {
         </div>
       </div>
 
-      <h3 className="text-lg font-semibold text-gray-900 mb-3">
-        Execution history
-      </h3>
+      <div className="flex items-center gap-2 mb-3">
+        <h3 className="text-lg font-semibold text-gray-900">
+          Execution history
+        </h3>
+        <span
+          className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full ${wsStatus === "open"
+            ? "bg-green-100 text-green-700"
+            : "bg-gray-100 text-gray-500"
+            }`}
+        >
+          <span
+            className={`w-1.5 h-1.5 rounded-full ${wsStatus === "open" ? "bg-green-500" : "bg-gray-400"
+              }`}
+          />
+          {wsStatus === "open" ? "Live" : "Reconnecting…"}
+        </span>
+      </div>
       <ExecutionTable
         executions={execData?.results}
         isRefetching={isRefetching}

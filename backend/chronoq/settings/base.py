@@ -19,6 +19,7 @@ ALLOWED_HOSTS = env.list("DJANGO_ALLOWED_HOSTS", default=[])
 
 # ===== Apps =====
 INSTALLED_APPS = [
+    "daphne",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -26,6 +27,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     # Third-party
+    "channels",
     "corsheaders",
     "rest_framework",
     "rest_framework.authtoken",
@@ -66,6 +68,7 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = "chronoq.wsgi.application"
+ASGI_APPLICATION = "chronoq.asgi.application"
 
 # ===== Database =====
 DATABASES = {
@@ -130,6 +133,20 @@ SCHEDULER_JITTER_SECONDS = env.int("SCHEDULER_JITTER_SECONDS", default=15)
 
 # ===== Redis (general cache / circuit breaker) =====
 REDIS_URL = env("REDIS_URL")
+
+# ===== Channels (WebSocket) channel layer =====
+# Redis-backed pub/sub bus connecting the Celery worker (event source) to
+# WebSocket consumers (in the ASGI process). We use a SEPARATE Redis DB (4)
+# from the broker (1), results (2), and cache/circuit-breaker (0) to keep
+# concerns isolated.
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [env("CHANNELS_REDIS_URL", default="redis://redis:6379/4")],
+        },
+    },
+}
 
 # ===== Django REST Framework =====
 REST_FRAMEWORK = {
