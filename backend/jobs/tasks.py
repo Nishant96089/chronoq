@@ -168,11 +168,23 @@ def execute_job_execution(execution_id: int) -> dict:
         cb_state,
     )
 
+    # Merge chronoq idempotency/context headers with the user's headers.
+    # X-Job-Execution-Id is a STABLE idempotency key: same value on a
+    # redelivery of this execution (same row), distinct on a retry (new row).
+    # Receivers should dedupe on it. User headers take precedence if they
+    # somehow collide (we don't override their explicit choices).
+    outgoing_headers = {
+        "X-Job-Execution-Id": str(execution.public_id),
+        "X-Job-Id": str(job.public_id),
+        "X-Job-Attempt": str(execution.attempt_number),
+        **(job.headers or {}),
+    }
+
     try:
         response = requests.request(
             method=job.http_method,
             url=job.target_url,
-            headers=job.headers or {},
+            headers=outgoing_headers,
             data=job.body or None,
             timeout=job.timeout_seconds,
         )

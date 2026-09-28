@@ -421,3 +421,23 @@ no-op (handles "crashed after recording, before ack"). pending/running re-run
 **The duplicate that remains** (crashed mid-HTTP-call → call happens twice) is
 inherent to at-least-once and is handled RECEIVER-side by idempotency
 (X-Job-Execution-Id, next step), not sender-side.
+
+
+## 2026-09-28 — Idempotency: X-Job-Execution-Id key
+
+Completes the at-least-once story (receiver side). chronoq may call a target
+twice (redelivery or retry); we send a stable key so receivers can dedupe.
+
+**Key = execution public_id.** Threads the needle exactly:
+- Redelivery of one attempt = same row = same public_id → receiver dedupes. ✓
+- Retry = new JobExecution row = new public_id → receiver processes it. ✓
+A job-level key would wrongly dedupe retries; a per-call key wouldn't dedupe
+redeliveries. Per-execution UUID (from Phase 1 modeling) is the right unit.
+
+**Headers:** X-Job-Execution-Id (idempotency key), X-Job-Id (context),
+X-Job-Attempt (attempt number, informational). User headers spread last → win
+collisions (we never override explicit user config).
+
+**Scope:** we send + document the contract (docs/idempotency.md); enforcement is
+the receiver's responsibility (same as Stripe's Idempotency-Key). We can't force
+dedupe; we provide a correct, stable mechanism.
