@@ -8,6 +8,7 @@ x-django-common: &django-common
   env_file: .env
   volumes:
     - ./backend:/app
+    - prometheus_multiproc:/tmp/prometheus_multiproc
   depends_on:
     postgres:
       condition: service_healthy
@@ -100,9 +101,41 @@ services:
     environment:
       - API_BASE=http://django:8000
 
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - chronoq-net
+    profiles:
+      - observability
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=chronoq123
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+    networks:
+      - chronoq-net
+    depends_on:
+      - prometheus
+    profiles:
+      - observability
+
 volumes:
   postgres-data:
   redis-data:
+  prometheus_multiproc:
+  prometheus_data:
+  grafana_data:
 
 networks:
   chronoq-net:

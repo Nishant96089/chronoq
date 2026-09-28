@@ -26,6 +26,12 @@ from django.utils import timezone
 
 from .alerts import CONDITION_CIRCUIT_OPEN, CONDITION_RETRIES_EXHAUSTED, fire_alert
 from .circuit_breaker import CircuitBreaker
+from .metrics import (
+    execution_duration_seconds,
+    executions_total,
+    retries_total,
+    ticks_total,
+)
 from .models import Job, JobExecution
 from .realtime import publish_execution_update
 from .services import (
@@ -50,6 +56,7 @@ def tick() -> dict:
     with scheduler_leadership() as is_leader:
         if not is_leader:
             logger.info("tick: NOT leader, skipping")  # INFO so it's visible
+            ticks_total.labels(leader="false").inc()
             return {"leader": False, "considered": 0, "dispatched": 0}
 
         now = timezone.now()
@@ -77,6 +84,7 @@ def tick() -> dict:
             "considered": len(due_jobs),
             "dispatched": dispatched,
         }
+        ticks_total.labels(leader="true").inc()
         logger.info("tick complete (leader): %s", result)
         return result
 
@@ -265,6 +273,8 @@ def _maybe_retry(execution: JobExecution, job: Job) -> None:
             parent_execution=root,
         )
 
+    retries_total.inc()
+
     def _dispatch():
         execute_job_execution.apply_async(args=[retry.id], eta=retry_scheduled_for)
 
@@ -322,4 +332,8 @@ def _finish(
         status,
         http_status_code,
     )
+    executions_total.labels(status=status).inc()
+    if execution.started_at and execution.finished_at:
+        duration = (execution.finished_at - execution.started_at).total_seconds()
+        execution_duration_seconds.observe(duration)
     publish_execution_update(execution)

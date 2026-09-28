@@ -12,6 +12,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 env = environ.Env()
 
+# ===== Prometheus metrics (multiprocess) =====
+# All processes (Django + Celery workers) write metric values to this shared
+# directory as memory-mapped files. Django's /metrics endpoint aggregates them
+# so Prometheus scrapes ONE endpoint and sees the whole system.
+PROMETHEUS_MULTIPROC_DIR = env("PROMETHEUS_MULTIPROC_DIR", default="/tmp/prometheus_multiproc")
+
 # ===== Core =====
 SECRET_KEY = env("DJANGO_SECRET_KEY")
 DEBUG = env.bool("DJANGO_DEBUG", default=False)
@@ -27,6 +33,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     # Third-party
+    "django_prometheus",
     "channels",
     "corsheaders",
     "rest_framework",

@@ -441,3 +441,31 @@ collisions (we never override explicit user config).
 **Scope:** we send + document the contract (docs/idempotency.md); enforcement is
 the receiver's responsibility (same as Stripe's Idempotency-Key). We can't force
 dedupe; we provide a correct, stable mechanism.
+
+## 2026-09-28 — Observability: Prometheus + Grafana
+
+Distributed systems can't be understood from one log file. Added metrics
+(the second observability pillar) so "is the system healthy?" has a real answer.
+
+**Architecture:** pull model. Django exposes /metrics; Prometheus scrapes it
+every 15s and stores time-series; Grafana dashboards query Prometheus.
+
+**Cross-process metrics (the hard part):** metrics live per-process, but the
+executor runs in Celery workers, not Django. Used prometheus_client MULTIPROCESS
+mode — all processes write metric values to a shared volume
+(PROMETHEUS_MULTIPROC_DIR); Django's /metrics aggregates across them. So
+Prometheus scrapes ONE endpoint and sees the whole system. Chosen over
+per-worker endpoints (discovery pain) and Pushgateway (breaks pull-model
+liveness, stale metrics).
+
+**Metrics:** counters (ticks by leader, executions by status, retries, circuit
+trips by domain, alerts by condition), a gauge (active jobs), a histogram
+(execution duration → p50/p95). Metric-type choice per signal: counter for
+totals (look at rate()), gauge for current state, histogram for distributions.
+
+**Services:** prometheus + grafana added under a compose `observability` profile
+(optional, heavier — not started by default, like k6's loadtest profile).
+Dashboard stored as code (grafana/chronoq-dashboard.json) and imported.
+
+**Security note:** /metrics is unauthenticated (standard for Prometheus scrape).
+In prod, restrict to the internal network — don't expose publicly.

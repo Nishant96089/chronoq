@@ -135,6 +135,11 @@ def fire_alert(job, condition: str, detail: str) -> bool:
         logger.info("alert throttled job=%s condition=%s", job.public_id, condition)
         return False
 
+    # Metric: import here to avoid a circular import at module load.
+    from .metrics import alerts_total
+
+    alerts_total.labels(condition=condition).inc()
+
     send_alert.delay(
         job_public_id=str(job.public_id),
         job_name=job.name,

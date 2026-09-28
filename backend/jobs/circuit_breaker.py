@@ -149,6 +149,10 @@ class CircuitBreaker:
         pipe.delete(keys["probe_lock"])
         pipe.delete(keys["failures"])
         pipe.execute()
+        # Metric: import here to avoid a circular import at module load.
+        from .metrics import circuit_opened_total
+
+        circuit_opened_total.labels(domain=domain).inc()
         logger.warning("circuit OPENED for domain=%s", domain)
 
     def current_state(self, domain: str) -> str:

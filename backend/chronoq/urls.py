@@ -13,4 +13,6 @@ urlpatterns = [
     path("api/auth/token/", obtain_auth_token, name="api_token_auth"),
     # Session login for the browsable API.
     path("api-auth/", include("rest_framework.urls")),
+    # Prometheus metrics endpoint (aggregates multiprocess metrics).
+    path("", include("django_prometheus.urls")),
 ]

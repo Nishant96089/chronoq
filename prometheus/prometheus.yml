@@ -1,0 +1,16 @@
+# Prometheus configuration for chronoq.
+global:
+  scrape_interval: 15s        # how often to pull metrics
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Scrape chronoq's Django /metrics endpoint (which aggregates worker metrics).
+  - job_name: "chronoq"
+    static_configs:
+      - targets: ["django:8000"]
+    metrics_path: "/metrics"
+
+  # Prometheus scraping itself (useful for confirming it's alive).
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
