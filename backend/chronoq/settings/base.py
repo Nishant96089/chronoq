@@ -193,12 +193,14 @@ REST_FRAMEWORK = {
 
 # ===== Django cache (shared, Redis) =====
 # DRF throttle counters live here. It MUST be shared across processes/nodes, or
-# each gunicorn worker counts independently and the effective limit is N x config.
-# Dedicated Redis DB 3 (0=cache/breaker, 1=broker, 2=results, 4=channels).
+# each gunicorn worker counts independently (effective limit = N x config).
+# Derive host/port from REDIS_URL (correct in every env: docker -> redis,
+# CI -> localhost) with a dedicated DB 3, so no per-environment config is needed.
+_CACHE_DEFAULT = REDIS_URL.rsplit("/", 1)[0] + "/3"
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",
-        "LOCATION": env("DJANGO_CACHE_URL", default="redis://redis:6379/3"),
+        "LOCATION": env("DJANGO_CACHE_URL", default=_CACHE_DEFAULT),
     }
 }
 
