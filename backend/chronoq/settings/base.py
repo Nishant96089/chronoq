@@ -147,6 +147,12 @@ EXECUTION_PURGE_BATCH_SIZE = env.int("EXECUTION_PURGE_BATCH_SIZE", default=1000)
 # ===== Redis (general cache / circuit breaker) =====
 REDIS_URL = env("REDIS_URL")
 
+# ===== Field encryption (secrets at rest) =====
+# Fernet keys for Job.headers / Job.body. Comma-separated for rotation (first
+# encrypts, all decrypt). If unset, a key is derived from DJANGO_SECRET_KEY so
+# dev/test/CI work with no extra config; PROD must set explicit keys.
+FIELD_ENCRYPTION_KEYS = env.list("FIELD_ENCRYPTION_KEYS", default=[])
+
 # ===== Channels (WebSocket) channel layer =====
 # Redis-backed pub/sub bus connecting the Celery worker (event source) to
 # WebSocket consumers (in the ASGI process). We use a SEPARATE Redis DB (4)

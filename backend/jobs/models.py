@@ -13,6 +13,8 @@ import uuid
 from django.conf import settings
 from django.db import models
 
+from .fields import EncryptedJSONField, EncryptedTextField
+
 
 class Job(models.Model):
     """
@@ -45,8 +47,8 @@ class Job(models.Model):
         choices=HTTPMethod.choices,
         default=HTTPMethod.POST,
     )
-    headers = models.JSONField(default=dict, blank=True)
-    body = models.TextField(blank=True, default="")
+    headers = EncryptedJSONField(default=dict, blank=True)
+    body = EncryptedTextField(blank=True, default="")
     timeout_seconds = models.PositiveIntegerField(default=30)
 
     # ===== When to do it =====

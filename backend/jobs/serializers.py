@@ -19,6 +19,7 @@ from .services import validate_cron_expression
 class JobSerializer(serializers.ModelSerializer):
     # `owner` is set from the request user, not sent by the client.
     owner = serializers.PrimaryKeyRelatedField(read_only=True)
+    headers = serializers.JSONField(required=False)
 
     class Meta:
         model = Job
