@@ -7,6 +7,8 @@ from django.urls import include, path
 from rest_framework.authtoken.views import ObtainAuthToken
 from rest_framework.throttling import ScopedRateThrottle
 
+from chronoq.health import healthz, readyz
+
 
 class ThrottledObtainAuthToken(ObtainAuthToken):
     """
@@ -22,6 +24,8 @@ class ThrottledObtainAuthToken(ObtainAuthToken):
 
 
 urlpatterns = [
+    path("healthz", healthz, name="healthz"),
+    path("readyz", readyz, name="readyz"),
     path("admin/", admin.site.urls),
     path("api/", include("jobs.urls")),
     # Token login: POST {username, password} -> {"token": "..."} (rate-limited)

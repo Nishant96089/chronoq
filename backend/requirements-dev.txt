@@ -103,7 +103,9 @@ pytest-cov==6.0.0
 pytest-django==4.9.0
     # via -r requirements-dev.in
 pyyaml==6.0.3
-    # via responses
+    # via
+    #   -c /app/requirements.txt
+    #   responses
 requests==2.32.3
     # via
     #   -c /app/requirements.txt

@@ -18,3 +18,7 @@ daphne==4.1.2
 prometheus-client==0.21.1
 django-prometheus==2.3.1
 cryptography==44.0.0
+
+# ===== Production serving =====
+uvicorn[standard]==0.34.0
+whitenoise[brotli]==6.8.2

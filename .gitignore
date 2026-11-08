@@ -55,3 +55,7 @@ Thumbs.db
 *.pem
 *.key
 secrets/
+
+# Local secrets (never commit)
+.env
+.env.prod

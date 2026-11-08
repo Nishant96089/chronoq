@@ -32,7 +32,11 @@ FROM base AS prod
 RUN pip install -r requirements.txt
 COPY . .
 RUN chmod +x /app/scripts/*.sh
-RUN useradd --create-home --shell /bin/bash chronoq && chown -R chronoq:chronoq /app
+RUN useradd --create-home --shell /bin/bash chronoq \
+    && mkdir -p /app/staticfiles /app/prometheus_multiproc \
+    && chown -R chronoq:chronoq /app
 USER chronoq
 EXPOSE 8000
-CMD ["gunicorn", "chronoq.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4"]
+ENTRYPOINT ["/app/scripts/entrypoint-django-prod.sh"]
+# ASGI (HTTP + WebSocket) under Gunicorn with Uvicorn workers.
+CMD ["gunicorn", "chronoq.asgi:application", "-c", "gunicorn.conf.py"]
