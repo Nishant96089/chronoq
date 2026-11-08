@@ -126,3 +126,57 @@ def compute_jitter_seconds(max_jitter_seconds=None):
         return 0.0
 
     return random.uniform(0, max_jitter_seconds)
+
+
+def purge_old_executions(older_than_days=None, batch_size=None) -> int:
+    """
+    Delete JobExecution rows older than the retention window, in batches.
+
+    Execution history is append-only and grows without bound. This enforces a
+    retention policy by deleting rows whose created_at is older than the cutoff.
+
+    Deletion is CHUNKED (batch_size rows per round) so a large purge never takes
+    one long lock or bloats a single transaction — each batch is its own small,
+    index-driven delete. This is the production-correct way to bulk-delete in
+    Postgres (a single huge DELETE causes long locks and table bloat).
+
+    Args:
+        older_than_days: rows older than this are deleted. Defaults to
+            settings.EXECUTION_RETENTION_DAYS. 0 (or less) disables purging.
+        batch_size: rows deleted per round. Defaults to
+            settings.EXECUTION_PURGE_BATCH_SIZE.
+
+    Returns:
+        Total number of execution rows deleted.
+    """
+    from datetime import timedelta
+
+    from django.conf import settings
+
+    from .models import JobExecution
+
+    if older_than_days is None:
+        older_than_days = getattr(settings, "EXECUTION_RETENTION_DAYS", 90)
+    if batch_size is None:
+        batch_size = getattr(settings, "EXECUTION_PURGE_BATCH_SIZE", 1000)
+
+    if older_than_days <= 0:
+        return 0  # retention disabled
+
+    cutoff = timezone.now() - timedelta(days=older_than_days)
+    total = 0
+    while True:
+        # Select a batch of PKs first, then delete them. Selecting the PKs keeps
+        # each delete statement small and driven by the created_at index.
+        ids = list(
+            JobExecution.objects.filter(created_at__lt=cutoff).values_list("pk", flat=True)[
+                :batch_size
+            ]
+        )
+        if not ids:
+            break
+        deleted, _ = JobExecution.objects.filter(pk__in=ids).delete()
+        total += deleted
+        if len(ids) < batch_size:
+            break
+    return total

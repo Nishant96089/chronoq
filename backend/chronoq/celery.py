@@ -1,6 +1,7 @@
 import os
 
 from celery import Celery
+from celery.schedules import crontab
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "chronoq.settings.dev")
 
@@ -14,6 +15,13 @@ app.conf.beat_schedule = {
     "scheduler-tick": {
         "task": "jobs.tick",
         "schedule": 30.0,  # seconds
+    },
+    # Daily execution-history retention purge. Leadership-gated in the task, so
+    # in a multi-node deployment only one node actually purges. 03:17 UTC is an
+    # off-peak, non-round minute (avoids bunching with other :00 cron jobs).
+    "retention-purge": {
+        "task": "jobs.purge_executions",
+        "schedule": crontab(hour=3, minute=17),
     },
 }
 

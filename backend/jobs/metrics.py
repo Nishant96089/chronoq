@@ -56,3 +56,8 @@ execution_duration_seconds = Histogram(
     "Wall-clock duration of job executions (HTTP call).",
     buckets=(0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0),
 )
+
+executions_purged_total = Counter(
+    "chronoq_executions_purged_total",
+    "Execution rows deleted by the retention purge.",
+)

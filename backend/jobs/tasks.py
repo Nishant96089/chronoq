@@ -28,6 +28,7 @@ from .alerts import CONDITION_CIRCUIT_OPEN, CONDITION_RETRIES_EXHAUSTED, fire_al
 from .circuit_breaker import CircuitBreaker
 from .metrics import (
     execution_duration_seconds,
+    executions_purged_total,
     executions_total,
     retries_total,
     ticks_total,
@@ -38,6 +39,7 @@ from .services import (
     compute_jitter_seconds,
     compute_next_fire_at,
     compute_retry_scheduled_for,
+    purge_old_executions,
     scheduler_leadership,
 )
 
@@ -87,6 +89,25 @@ def tick() -> dict:
         ticks_total.labels(leader="true").inc()
         logger.info("tick complete (leader): %s", result)
         return result
+
+
+@shared_task(name="jobs.purge_executions")
+def purge_executions() -> dict:
+    """
+    Daily retention purge. Leadership-gated so only one node purges in a
+    multi-node deployment. Deletes execution rows older than
+    EXECUTION_RETENTION_DAYS, in batches.
+    """
+    with scheduler_leadership() as is_leader:
+        if not is_leader:
+            logger.info("purge_executions: NOT leader, skipping")
+            return {"leader": False, "deleted": 0}
+
+        deleted = purge_old_executions()
+        if deleted:
+            executions_purged_total.inc(deleted)
+        logger.info("purge_executions complete (leader): deleted=%s", deleted)
+        return {"leader": True, "deleted": deleted}
 
 
 def _schedule_one(job: Job, scheduled_for) -> None:

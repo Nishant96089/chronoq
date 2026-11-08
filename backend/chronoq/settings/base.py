@@ -138,6 +138,12 @@ CELERY_BROKER_TRANSPORT_OPTIONS = {"visibility_timeout": 3600}
 # Applies ONLY to scheduled dispatches — not manual triggers or retries.
 SCHEDULER_JITTER_SECONDS = env.int("SCHEDULER_JITTER_SECONDS", default=15)
 
+# ===== Execution retention =====
+# Delete JobExecution rows older than this many days (0 disables). A batched
+# purge runs daily (jobs.purge_executions), leadership-gated.
+EXECUTION_RETENTION_DAYS = env.int("EXECUTION_RETENTION_DAYS", default=90)
+EXECUTION_PURGE_BATCH_SIZE = env.int("EXECUTION_PURGE_BATCH_SIZE", default=1000)
+
 # ===== Redis (general cache / circuit breaker) =====
 REDIS_URL = env("REDIS_URL")
 

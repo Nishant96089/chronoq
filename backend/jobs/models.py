@@ -171,10 +171,9 @@ class JobExecution(models.Model):
 
     class Meta:
         indexes = [
-            # "Show me recent executions for this job" — the dashboard's main query.
             models.Index(fields=["job", "-started_at"], name="exec_job_started_idx"),
-            # "Find stuck executions" — Phase 2 will need this for timeout detection.
             models.Index(fields=["status", "scheduled_for"], name="exec_status_sched_idx"),
+            models.Index(fields=["created_at"], name="exec_created_idx"),
         ]
         ordering = ["-scheduled_for"]
 
