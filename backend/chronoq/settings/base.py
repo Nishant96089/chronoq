@@ -180,6 +180,26 @@ REST_FRAMEWORK = {
         "rest_framework.renderers.JSONRenderer",
         "rest_framework.renderers.BrowsableAPIRenderer",
     ],
+    "DEFAULT_THROTTLE_CLASSES": [
+        "jobs.throttling.BurstRateThrottle",
+        "jobs.throttling.SustainedRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "burst": env("THROTTLE_BURST", default="60/min"),
+        "sustained": env("THROTTLE_SUSTAINED", default="1000/hour"),
+        "login": env("THROTTLE_LOGIN", default="10/min"),
+    },
+}
+
+# ===== Django cache (shared, Redis) =====
+# DRF throttle counters live here. It MUST be shared across processes/nodes, or
+# each gunicorn worker counts independently and the effective limit is N x config.
+# Dedicated Redis DB 3 (0=cache/breaker, 1=broker, 2=results, 4=channels).
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": env("DJANGO_CACHE_URL", default="redis://redis:6379/3"),
+    }
 }
 
 # ===== CORS =====
