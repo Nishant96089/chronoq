@@ -64,7 +64,10 @@ services:
     <<: *django-common
     restart: "no"
     entrypoint: []
-    command: ["python", "manage.py", "migrate", "--noinput"]
+    command:
+      - sh
+      - -c
+      - python manage.py migrate --noinput && python manage.py bootstrap_admin
     depends_on:
       postgres:
         condition: service_healthy
