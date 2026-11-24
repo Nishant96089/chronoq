@@ -71,3 +71,13 @@ class RegisterView(APIView):
             {"token": token.key, "username": user.username},
             status=status.HTTP_201_CREATED,
         )
+
+
+class RegistrationConfigView(APIView):
+    """Public: lets the SPA show the 'Create account' link only when enabled."""
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        return Response({"registration_enabled": settings.ENABLE_REGISTRATION})

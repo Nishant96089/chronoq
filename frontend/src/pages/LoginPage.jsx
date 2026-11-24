@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { login } from "../api/auth";
+import { useState, useEffect } from "react";
+import { useNavigate, Link } from "react-router-dom";
+import { login, fetchRegistrationEnabled } from "../api/auth";
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -8,6 +8,20 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [registrationEnabled, setRegistrationEnabled] = useState(false);
+
+  // Ask the backend whether signup is enabled; only then show the link.
+  useEffect(() => {
+    let active = true;
+    fetchRegistrationEnabled()
+      .then((enabled) => {
+        if (active) setRegistrationEnabled(enabled);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -86,6 +100,15 @@ export default function LoginPage() {
             {submitting ? "Signing in..." : "Sign in"}
           </button>
         </form>
+
+        {registrationEnabled && (
+          <p className="mt-4 text-center text-sm text-gray-500">
+            No account?{" "}
+            <Link to="/register" className="text-indigo-600 hover:text-indigo-700 font-medium">
+              Create one
+            </Link>
+          </p>
+        )}
       </div>
     </div>
   );

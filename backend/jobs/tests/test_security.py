@@ -112,3 +112,11 @@ def test_register_rejects_duplicate_username(settings, django_user_model):
         format="json",
     )
     assert resp.status_code == 400
+
+
+@pytest.mark.django_db
+def test_registration_config_reports_flag(settings):
+    settings.ENABLE_REGISTRATION = True
+    resp = APIClient().get("/api/auth/config/")
+    assert resp.status_code == 200
+    assert resp.data["registration_enabled"] is True

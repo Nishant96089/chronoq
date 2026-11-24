@@ -16,3 +16,24 @@ export function logout() {
 export function isAuthenticated() {
   return Boolean(localStorage.getItem("chronoq_token"));
 }
+
+// POST new-account details, get back a token, store it (same as login()).
+export async function register(username, password, email) {
+  const { data } = await client.post("/auth/register/", {
+    username,
+    password,
+    email,
+  });
+  localStorage.setItem("chronoq_token", data.token);
+  return data.token;
+}
+
+// Public: whether self-service registration is enabled on the backend.
+export async function fetchRegistrationEnabled() {
+  try {
+    const { data } = await client.get("/auth/config/");
+    return Boolean(data.registration_enabled);
+  } catch {
+    return false;
+  }
+}
