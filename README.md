@@ -8,9 +8,9 @@ Built as a deep-dive into the distributed-systems patterns behind production
 schedulers — leader election, idempotency, backpressure, and observability —
 running end to end under Docker Compose.
 
-<!-- Replace your-username/chronoq with your GitHub path -->
+<!-- Replace Nishant96089/chronoq with your GitHub path -->
 
-![CI](https://github.com/your-username/chronoq/actions/workflows/ci.yml/badge.svg)
+[![CI](https://github.com/Nishant96089/chronoq/actions/workflows/ci.yml/badge.svg)](https://github.com/Nishant96089/chronoq/actions/workflows/ci.yml)
 
 ![chronoq — job detail with the live execution feed](docs/screenshots/webhook_tab.png)
 
@@ -138,7 +138,7 @@ short version:
 ## Quickstart (development)
 
 ```bash
-git clone https://github.com/your-username/chronoq.git chronoq
+git clone https://github.com/Nishant96089/chronoq.git chronoq
 cd chronoq
 cp .env.example .env            # then set DJANGO_SECRET_KEY + DJANGO_SUPERUSER_PASSWORD
 make up                         # start all services (detached)
