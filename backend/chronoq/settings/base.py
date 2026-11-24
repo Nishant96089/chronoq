@@ -220,3 +220,17 @@ CORS_ALLOWED_ORIGINS = env.list(
         "http://127.0.0.1:3000",
     ],
 )
+
+
+# ===== Self-service registration (opt-in) =====
+# chronoq executes user-supplied URLs, so signup is OFF by default. Enable only
+# alongside SSRF protection (ALLOW_PRIVATE_TARGET_URLS=False); the register
+# endpoint rides the tight "login" throttle scope and Django's password rules.
+ENABLE_REGISTRATION = env.bool("ENABLE_REGISTRATION", default=False)
+
+# ===== SSRF protection on job target URLs =====
+# When False (prod default), a job's target_url is rejected if it resolves to a
+# private / loopback / link-local (cloud-metadata) address — at create time and
+# re-checked at execution. Dev/test flip this True so jobs may hit localhost
+# test servers and mocked hosts.
+ALLOW_PRIVATE_TARGET_URLS = env.bool("ALLOW_PRIVATE_TARGET_URLS", default=False)

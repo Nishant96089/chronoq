@@ -10,3 +10,7 @@ INTERNAL_IPS = ["127.0.0.1"]
 # Dev: print emails to the console instead of sending them.
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 DEFAULT_FROM_EMAIL = "chronoq <noreply@chronoq.local>"
+
+
+# Dev/test jobs commonly target localhost webhooks and mocked hosts.
+ALLOW_PRIVATE_TARGET_URLS = True

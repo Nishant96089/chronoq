@@ -8,6 +8,7 @@ from rest_framework.authtoken.views import ObtainAuthToken
 from rest_framework.throttling import ScopedRateThrottle
 
 from chronoq.health import healthz, readyz
+from jobs.registration import RegisterView
 
 
 class ThrottledObtainAuthToken(ObtainAuthToken):
@@ -30,6 +31,8 @@ urlpatterns = [
     path("api/", include("jobs.urls")),
     # Token login: POST {username, password} -> {"token": "..."} (rate-limited)
     path("api/auth/token/", ThrottledObtainAuthToken.as_view(), name="api_token_auth"),
+    # Self-service registration (403 unless ENABLE_REGISTRATION is set).
+    path("api/auth/register/", RegisterView.as_view(), name="api_register"),
     # Session login for the browsable API.
     path("api-auth/", include("rest_framework.urls")),
     # Prometheus metrics endpoint (aggregates multiprocess metrics).

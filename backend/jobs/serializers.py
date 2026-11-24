@@ -10,10 +10,12 @@ Design notes:
   not by clients.
 """
 
+from django.conf import settings
 from rest_framework import serializers
 
 from .models import Job, JobExecution
 from .services import validate_cron_expression
+from .validators import UnsafeTargetURLError, validate_public_url
 
 
 class JobSerializer(serializers.ModelSerializer):
@@ -65,6 +67,15 @@ class JobSerializer(serializers.ModelSerializer):
         for k, v in value.items():
             if not isinstance(k, str) or not isinstance(v, str):
                 raise serializers.ValidationError("All header keys and values must be strings.")
+        return value
+
+    def validate_target_url(self, value: str) -> str:
+        """Block SSRF: reject targets resolving to private/metadata hosts."""
+        if not settings.ALLOW_PRIVATE_TARGET_URLS:
+            try:
+                validate_public_url(value)
+            except UnsafeTargetURLError as e:
+                raise serializers.ValidationError(str(e)) from e
         return value
 
 

@@ -21,6 +21,7 @@ import logging
 
 import requests
 from celery import shared_task
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
@@ -42,6 +43,7 @@ from .services import (
     purge_old_executions,
     scheduler_leadership,
 )
+from .validators import UnsafeTargetURLError, validate_public_url
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +161,19 @@ def execute_job_execution(execution_id: int) -> dict:
         }
 
     job = execution.job
+
+    # --- SSRF guard: re-check the target at execution time ---
+    # Create-time validation can be defeated by DNS rebinding, so re-resolve
+    # right before the call. A blocked URL fails the execution with NO retry
+    # (it will not become safe on a retry) and does not touch the breaker.
+    if not settings.ALLOW_PRIVATE_TARGET_URLS:
+        try:
+            validate_public_url(job.target_url)
+        except UnsafeTargetURLError as e:
+            _finish(execution, status=JobExecution.Status.FAILED, error=f"blocked_url: {e}")
+            logger.warning("blocked unsafe target_url job=%s: %s", job.public_id, e)
+            return {"status": "blocked_url", "execution_id": execution_id}
+
     breaker = CircuitBreaker()
     domain = breaker.domain_for(job.target_url)
 
