@@ -3,9 +3,8 @@ name: chronoq-prod
 # Production stack. Run with:
 #   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 #
-# Differences from dev: builds the `prod` image target (gunicorn + uvicorn,
-# non-root user), no source bind mounts, restart policies, health checks, and a
-# one-shot `migrate` service so web/worker/beat never race on migrations.
+# nginx is the sole public entry point: it serves the built SPA and reverse-
+# proxies /api, /admin, /static and /ws to the (internal-only) django service.
 
 x-django-common: &django-common
   build:
@@ -16,8 +15,6 @@ x-django-common: &django-common
   env_file: .env.prod
   restart: unless-stopped
   volumes:
-    # Shared so Django's /metrics can aggregate the Celery workers' samples.
-    # Owned by the non-root `chronoq` user via the image dir (see Dockerfile).
     - prometheus_multiproc:/app/prometheus_multiproc
   depends_on:
     postgres:
@@ -62,8 +59,7 @@ services:
     networks:
       - chronoq-net
 
-  # One-shot: run migrations once, then exit 0. Everything else waits on this
-  # completing, so N replicas can't race on schema changes.
+  # One-shot: run migrations once, then exit 0.
   migrate:
     <<: *django-common
     restart: "no"
@@ -78,8 +74,9 @@ services:
   django:
     <<: *django-common
     command: ["gunicorn", "chronoq.asgi:application", "-c", "gunicorn.conf.py"]
-    ports:
-      - "8000:8000"
+    # Internal only — reached through nginx, not published to the host.
+    expose:
+      - "8000"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
       interval: 10s
@@ -94,6 +91,24 @@ services:
   celery-beat:
     <<: *django-common
     command: ["celery", "-A", "chronoq", "beat", "-l", "info"]
+
+  # Public edge: built SPA + reverse proxy to django.
+  nginx:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: prod
+      args:
+        VITE_API_BASE_URL: /api
+    image: chronoq-frontend:prod
+    restart: unless-stopped
+    depends_on:
+      django:
+        condition: service_healthy
+    ports:
+      - "80:80"
+    networks:
+      - chronoq-net
 
 volumes:
   postgres-data:

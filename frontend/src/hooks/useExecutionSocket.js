@@ -36,9 +36,16 @@ export function useExecutionSocket(jobPublicId, { onUpdate } = {}) {
     // ws:// for http, wss:// for https. API host from env or default.
     const apiBase =
       import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api";
-    // Strip trailing /api and swap protocol.
-    const httpOrigin = apiBase.replace(/\/api\/?$/, "");
-    const wsOrigin = httpOrigin.replace(/^http/, "ws");
+    // new WebSocket() rejects relative URLs, so compute an absolute
+    // ws(s)://. Absolute base (dev default): reuse its host, swapping
+    // http->ws / https->wss. Relative base (prod "/api" behind nginx):
+    // take the host from the page itself to stay same-origin, using
+    // wss when the page is served over https.
+    const isAbsolute = /^https?:\/\//.test(apiBase);
+    const wsScheme = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsOrigin = isAbsolute
+      ? apiBase.replace(/\/api\/?$/, "").replace(/^http/, "ws")
+      : `${wsScheme}//${window.location.host}`;
     const url = `${wsOrigin}/ws/jobs/${jobPublicId}/executions/?token=${token}`;
 
     setStatus("connecting");
